@@ -8,6 +8,7 @@ An automated trading bot for MetaTrader 5 that implements a trading strategy bas
 - Technical analysis using SMA and RSI indicators
 - Risk management with stop loss
 - Contingency trading strategy
+- Multi-currency pair trading support
 - Modular code structure
 - Command-line interface
 - Comprehensive logging
@@ -63,12 +64,47 @@ mario_trader_beta/
 
 ## Usage
 
-The bot can be controlled via command-line interface:
+The bot can be controlled via command-line interface using either `main.py` or the more convenient `run.py` script.
+
+### Using run.py (Recommended)
+
+The `run.py` script provides a simplified interface:
+
+```
+python run.py start           # Start trading with a single pair
+python run.py start-multi     # Start trading with multiple pairs
+python run.py login           # Test MT5 login
+python run.py info            # Display configuration information
+python run.py test            # Run tests
+```
+
+With parameters:
+
+```
+python run.py start --pair EURUSD --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
+python run.py start-multi --interval 120 --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
+```
+
+### Using main.py
+
+Alternatively, you can use the main.py script directly:
 
 ### Display Configuration Information
 
 ```
 python main.py info
+```
+
+To see available currency pairs:
+
+```
+python main.py info --pairs
+```
+
+### List Available Currency Pairs
+
+```
+python main.py list-pairs
 ```
 
 ### Test MT5 Login
@@ -85,6 +121,8 @@ python main.py login --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_S
 
 ### Start the Trading Bot
 
+For a single currency pair:
+
 ```
 python main.py start
 ```
@@ -93,6 +131,18 @@ With custom parameters:
 
 ```
 python main.py start --pair EURUSD --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
+```
+
+For multiple currency pairs (trades all pairs in currency_pair_list.txt):
+
+```
+python main.py start --multi
+```
+
+With custom interval between trading cycles:
+
+```
+python main.py start --multi --interval 120
 ```
 
 ## Configuration

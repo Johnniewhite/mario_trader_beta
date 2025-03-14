@@ -15,6 +15,9 @@ TRADING_SETTINGS = {
     "risk_percentage": 0.02,  # 2% of account balance
     "timeframe": "M5",  # 5-minute candles
     "candles_count": 200,  # Number of candles to fetch
+    "multi_pair_interval": 60,  # Seconds between trading cycles in multi-pair mode
+    "max_open_positions": 5,  # Maximum number of open positions at once
+    "max_daily_trades": 20,  # Maximum number of trades per day
 }
 
 # Technical Indicator Settings
