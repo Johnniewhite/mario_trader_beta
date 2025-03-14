@@ -55,7 +55,7 @@ ORDER_SETTINGS = {
 # Logging Settings
 LOGGING_SETTINGS = {
     "enabled": True,
-    "level": "INFO",  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    "level": "DEBUG",  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     "log_to_file": True,
     "log_file": "mario_trader.log",
 } 

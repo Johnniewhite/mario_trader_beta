@@ -4,11 +4,13 @@ Trade execution module
 import math
 import time
 import MetaTrader5 as mt5
+import numpy as np
 from mario_trader.utils.mt5_handler import (
     fetch_data, get_balance, get_contract_size, open_trade, initialize_mt5, shutdown_mt5
 )
 from mario_trader.strategies.signal import generate_signal
 from mario_trader.strategies.monitor import monitor_trade
+from mario_trader.indicators.technical import calculate_indicators
 from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
@@ -31,6 +33,26 @@ def execute(forex_pair):
         if dfs is None or dfs.empty:
             logger.warning(f"No data available for {forex_pair}")
             return False
+            
+        # Add debug logging for market conditions
+        latest = dfs.iloc[-1]
+        dfs = calculate_indicators(dfs)  # Calculate indicators for logging
+        latest_with_indicators = dfs.iloc[-1]
+        
+        # Log key market conditions
+        logger.debug(f"{forex_pair} - Price: {latest['close']}, 200 SMA: {latest_with_indicators['200_SMA']:.2f}")
+        logger.debug(f"{forex_pair} - 21 SMA: {latest_with_indicators['21_SMA']:.2f}, 50 SMA: {latest_with_indicators['50_SMA']:.2f}")
+        logger.debug(f"{forex_pair} - RSI: {latest_with_indicators['RSI']:.2f}")
+        
+        # Check for consecutive candles
+        dfs['direction'] = np.sign(dfs['close'] - dfs['open'])
+        consecutive_sells = (dfs['direction'].iloc[-5] == -1) and (dfs['direction'].iloc[-4] == -1) and (dfs['direction'].iloc[-3] == -1)
+        consecutive_buys = (dfs['direction'].iloc[-5] == 1) and (dfs['direction'].iloc[-4] == 1) and (dfs['direction'].iloc[-3] == 1)
+        
+        if consecutive_sells:
+            logger.debug(f"{forex_pair} - Found 3 consecutive sell candles")
+        if consecutive_buys:
+            logger.debug(f"{forex_pair} - Found 3 consecutive buy candles")
             
         signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair)
         
