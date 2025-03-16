@@ -6,12 +6,13 @@ import time
 import MetaTrader5 as mt5
 import numpy as np
 from mario_trader.utils.mt5_handler import (
-    fetch_data, get_balance, get_contract_size, open_trade, initialize_mt5, shutdown_mt5
+    fetch_data, get_balance, get_contract_size, open_trade, initialize_mt5, shutdown_mt5,
+    get_current_price, close_trade
 )
 from mario_trader.strategies.signal import generate_signal
 from mario_trader.strategies.monitor import monitor_trade
 from mario_trader.indicators.technical import calculate_indicators
-from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS
+from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
 
@@ -77,17 +78,27 @@ def execute(forex_pair):
         min_lot_size = symbol_info.volume_min 
         max_lot_size = symbol_info.volume_max 
 
+        # Get the 21 SMA value
+        df = fetch_data(forex_pair)
+        df = calculate_indicators(df)
+        latest = df.iloc[-1]
+        sma_21 = latest['21_SMA']
+        
+        # Calculate distance to 21 SMA instead of stop loss
+        distance_to_21_sma = abs(current_market_price - sma_21)
+        
         one_lot_price = current_market_price * lot_size
-        risked_capital = (balance * TRADING_SETTINGS["risk_percentage"])
+        risk_percentage = 0.02  # 2% risk when price reaches 21 SMA
+        risked_capital = (balance * risk_percentage)
         one_pip_movement = 0.01 if "JPY" in forex_pair else 0.0001
-        stop_loss_in_pip = abs(current_market_price - stop_loss_value) / one_pip_movement
+        distance_in_pips = distance_to_21_sma / one_pip_movement
         pip_value = (one_pip_movement / current_market_price) * lot_size
-        lot_quantity = risked_capital / (stop_loss_in_pip * pip_value)
+        lot_quantity = risked_capital / (distance_in_pips * pip_value)
 
         # Ensure volume is within allowed limits
         volume = max(min(lot_quantity, max_lot_size), min_lot_size)
         
-        logger.info(f"Calculated volume: {volume}, Stop loss: {stop_loss_value}")
+        logger.info(f"Calculated volume: {volume}, Stop loss: {stop_loss_value}, Distance to 21 SMA: {distance_to_21_sma} pips")
 
         if signal == -1:
             logger.info(f"Opening SELL trade for {forex_pair}")
