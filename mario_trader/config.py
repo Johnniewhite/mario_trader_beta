@@ -2,6 +2,35 @@
 Configuration settings for the trading bot
 """
 
+import logging
+import os
+import sys
+import MetaTrader5 as mt5
+from pathlib import Path
+
+# Define base directories
+BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LOGS_DIR = BASE_DIR / "logs"
+
+# Ensure logs directory exists
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+def get_default_pair():
+    """Get the default currency pair"""
+    try:
+        # Try to read from currency_pair_list.txt
+        pairs_file = BASE_DIR / "currency_pair_list.txt"
+        if pairs_file.exists():
+            with open(pairs_file, "r") as f:
+                pairs = [line.strip() for line in f.readlines() if line.strip()]
+                if pairs:
+                    return pairs[0]
+    except Exception as e:
+        print(f"Error reading default pair: {e}")
+    
+    # Default to EURUSD if no pairs found
+    return "EURUSD"
+
 # MT5 Connection Settings
 MT5_SETTINGS = {
     "login": 81338593,
@@ -9,16 +38,34 @@ MT5_SETTINGS = {
     "server": "Exness-MT5Trial10",
 }
 
-# Trading Settings
+# Trading settings
 TRADING_SETTINGS = {
-    "default_currency_pair": "EURUSD",
-    "risk_percentage": 0.02,  # 2% of account balance
-    "timeframe": "M5",  # 5-minute candles
+    "default_currency_pair": get_default_pair(),
+    "risk_percentage": 0.02,  # 2% risk per trade
+    "timeframe": mt5.TIMEFRAME_H1,  # 1-hour timeframe
     "candles_count": 200,  # Number of candles to fetch
+    "rsi_period": 14,  # RSI indicator period
+    "rsi_overbought": 70,  # RSI overbought level
+    "rsi_oversold": 30,  # RSI oversold level
+    "sma_period_fast": 21,  # Fast SMA period
+    "sma_period_slow": 50,  # Slow SMA period
+    "sma_period_trend": 200,  # Trend SMA period
+    "min_sma_separation": 0.0005,  # Minimum separation between SMAs
+    "debug_mode": False,  # Debug mode (enables more detailed logging and relaxes some conditions)
+    "force_buy": False,  # Force a buy signal (for testing)
+    "force_sell": False,  # Force a sell signal (for testing)
     "multi_pair_interval": 60,  # Seconds between trading cycles in multi-pair mode
-    "max_open_positions": 5,  # Maximum number of open positions at once
-    "max_daily_trades": 20,  # Maximum number of trades per day
-    "debug_mode": False,  # Set to True to relax strategy conditions for testing
+    "profit_taking": {
+        "enable_rsi_divergence": True,  # Enable RSI divergence detection for profit taking
+        "enable_profit_target": True,  # Enable profit target based on entry to 21 SMA distance
+        "profit_factor": 2.0,  # Profit target multiplier (2x the distance to 21 SMA)
+    },
+    "contingency_plan": {
+        "enabled": True,  # Enable contingency plan for trades
+        "stop_multiplier": 2.0,  # Lot size multiplier for stop orders (2x initial lot size)
+        "limit_multiplier": 3.0,  # Lot size multiplier for limit orders (3x initial lot size)
+        "cascade_multiplier": 1.0,  # Additional multiplier for each cascade level
+    }
 }
 
 # Technical Indicator Settings
@@ -59,4 +106,21 @@ LOGGING_SETTINGS = {
     "level": "DEBUG",  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     "log_to_file": True,
     "log_file": "mario_trader.log",
-} 
+}
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(LOGS_DIR, 'mario_trader.log')),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Export logger instance
+logger = logging.getLogger('mario_trader')
+
+# Set MetaTrader5 logging level
+mt5_logger = logging.getLogger('MetaTrader5')
+mt5_logger.setLevel(logging.ERROR)  # Only log errors from MetaTrader5 

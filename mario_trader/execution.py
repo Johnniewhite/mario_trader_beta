@@ -47,19 +47,12 @@ def execute(forex_pair):
         
         # Check for consecutive candles
         dfs['direction'] = np.sign(dfs['close'] - dfs['open'])
-        consecutive_sells = (dfs['direction'].iloc[-5] == -1) and (dfs['direction'].iloc[-4] == -1) and (dfs['direction'].iloc[-3] == -1)
-        consecutive_buys = (dfs['direction'].iloc[-5] == 1) and (dfs['direction'].iloc[-4] == 1) and (dfs['direction'].iloc[-3] == 1)
         
-        if consecutive_sells:
-            logger.debug(f"{forex_pair} - Found 3 consecutive sell candles")
-        if consecutive_buys:
-            logger.debug(f"{forex_pair} - Found 3 consecutive buy candles")
-            
         # Get debug mode setting from configuration
         debug_mode = TRADING_SETTINGS.get("debug_mode", False)
         if debug_mode:
             logger.info(f"Running in DEBUG MODE - strategy conditions may be relaxed for {forex_pair}")
-            
+        
         # Force specific signal if requested (for testing)
         force_buy = TRADING_SETTINGS.get("force_buy", False)
         force_sell = TRADING_SETTINGS.get("force_sell", False)
@@ -88,133 +81,496 @@ def execute(forex_pair):
             logger.info(f"No trading signal for {forex_pair}")
             return False
             
-        balance = get_balance()
-        logger.info(f"Account balance: {balance}")
+        # Calculate lot size based on risk management
+        stop_loss_distance_points = abs(current_market_price - stop_loss_value)
+        lot_size = calculate_lot_size(forex_pair, stop_loss_distance_points)
+        
+        # Check for open positions
+        open_positions = get_open_positions(forex_pair)
+        
+        # Check if we need to manage existing positions
+        if open_positions:
+            logger.info(f"Found {len(open_positions)} open positions for {forex_pair}")
+            
+            # Check if we need to exit based on profit targets or RSI divergence
+            should_exit, exit_reason = check_exit_conditions(forex_pair, dfs, open_positions)
+            if should_exit:
+                logger.info(f"Exiting positions for {forex_pair}: {exit_reason}")
+                close_all_positions(forex_pair)
+                
+                # Apply contingency plan if exits were in profit
+                if "profit" in exit_reason.lower():
+                    apply_contingency_plan(forex_pair, open_positions, latest_with_indicators)
+                
+                return True
+            
+            # If we have open positions but no exit, don't enter new ones in same direction
+            if (signal == 1 and any(p.type == 0 for p in open_positions)) or \
+               (signal == -1 and any(p.type == 1 for p in open_positions)):
+                logger.info(f"Already have open positions in same direction for {forex_pair}, not entering new trade")
+                return False
+        
+        # Execute trade
+        if signal == 1:  # BUY
+            trade_result = open_buy_trade(forex_pair, lot_size, stop_loss_value)
+            if trade_result:
+                logger.info(f"BUY trade executed for {forex_pair} at {current_market_price}, SL: {stop_loss_value}, Lot size: {lot_size}")
+                log_trade(forex_pair, "BUY", current_market_price, lot_size, stop_loss_value)
+                return True
+        elif signal == -1:  # SELL
+            trade_result = open_sell_trade(forex_pair, lot_size, stop_loss_value)
+            if trade_result:
+                logger.info(f"SELL trade executed for {forex_pair} at {current_market_price}, SL: {stop_loss_value}, Lot size: {lot_size}")
+                log_trade(forex_pair, "SELL", current_market_price, lot_size, stop_loss_value)
+                return True
+        
+        logger.warning(f"Failed to execute {signal_type} trade for {forex_pair}")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error executing trading strategy for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return False
 
-        lot_size = get_contract_size(forex_pair)
-        symbol_info = mt5.symbol_info(forex_pair)
-
-        if symbol_info is None:
-            log_error(f"Symbol info not found for {forex_pair}")
-            return False 
-
-        min_lot_size = symbol_info.volume_min 
-        max_lot_size = symbol_info.volume_max 
-
-        # Get the 21 SMA value
-        df = fetch_data(forex_pair)
-        df = calculate_indicators(df)
-        latest = df.iloc[-1]
+def check_exit_conditions(forex_pair, dfs, open_positions):
+    """
+    Check if we should exit existing positions based on:
+    1. RSI divergence
+    2. Profit is 2x the distance from entry to 21 SMA in pips
+    
+    Args:
+        forex_pair: Currency pair symbol
+        dfs: DataFrame with price data and indicators
+        open_positions: List of open positions
+        
+    Returns:
+        (should_exit, reason): Tuple with exit decision and reason
+    """
+    if not open_positions:
+        return False, ""
+    
+    # Get current price and indicators
+    latest = dfs.iloc[-1]
+    current_price = latest['close']
+    
+    # Check each position
+    for position in open_positions:
+        position_type = "BUY" if position.type == 0 else "SELL"
+        entry_price = position.price_open
+        
+        # Calculate 21 SMA distance from entry in pips
         sma_21 = latest['21_SMA']
         
-        # Calculate distance to 21 SMA instead of stop loss
-        distance_to_21_sma = abs(current_market_price - sma_21)
+        # For 5-digit brokers, divide by 10 for standard pip calculation
+        pip_multiplier = 10000.0
+        if forex_pair.endswith('JPY'):
+            pip_multiplier = 100.0
+        else:
+            # Most forex pairs have 4 or 5 decimal places
+            pip_multiplier = 10000.0
         
-        one_lot_price = current_market_price * lot_size
-        risk_percentage = 0.02  # 2% risk when price reaches 21 SMA
-        risked_capital = (balance * risk_percentage)
-        one_pip_movement = 0.01 if "JPY" in forex_pair else 0.0001
-        distance_in_pips = distance_to_21_sma / one_pip_movement
-        pip_value = (one_pip_movement / current_market_price) * lot_size
-        lot_quantity = risked_capital / (distance_in_pips * pip_value)
-
-        # Ensure volume is within allowed limits
-        volume = max(min(lot_quantity, max_lot_size), min_lot_size)
+        entry_to_sma_distance_pips = abs(entry_price - sma_21) * pip_multiplier
+        target_profit_pips = entry_to_sma_distance_pips * 2
         
-        logger.info(f"Calculated volume: {volume}, Stop loss: {stop_loss_value}, Distance to 21 SMA: {distance_to_21_sma} pips")
-
-        if signal == -1:
-            logger.info(f"Opening SELL trade for {forex_pair}")
-            trade_response = open_trade(forex_pair, volume, stop_loss_value, 'sell')
-            
-            if trade_response and trade_response.retcode == mt5.TRADE_RETCODE_DONE:
-                order_id = trade_response.order
-                position = trade_response.request.position
-                log_trade("OPEN", forex_pair, current_market_price, volume, "SELL", order_id)
-                monitor_trade(order_id, position, volume, "sell", stop_loss_value, current_market_price, forex_pair)
-                return True
-            else:
-                error_code = trade_response.retcode if trade_response else "Unknown"
-                error_message = trade_response.comment if trade_response else "No response"
-                log_error(f"Failed to open SELL trade: {error_message} (code: {error_code})")
-                return False
-
-        elif signal == 1:
-            logger.info(f"Opening BUY trade for {forex_pair}")
-            trade_response = open_trade(forex_pair, volume, stop_loss_value, 'buy')
-            
-            if trade_response and trade_response.retcode == mt5.TRADE_RETCODE_DONE:
-                order_id = trade_response.order
-                position = trade_response.request.position
-                log_trade("OPEN", forex_pair, current_market_price, volume, "BUY", order_id)
-                monitor_trade(order_id, position, volume, "buy", stop_loss_value, current_market_price, forex_pair)
-                return True
-            else:
-                error_code = trade_response.retcode if trade_response else "Unknown"
-                error_message = trade_response.comment if trade_response else "No response"
-                log_error(f"Failed to open BUY trade: {error_message} (code: {error_code})")
-                return False
+        # Check if in profit
+        if position_type == "BUY":
+            current_profit_pips = (current_price - entry_price) * pip_multiplier
+            # Check profit target
+            if current_profit_pips >= target_profit_pips:
+                return True, f"BUY position profit target reached: {current_profit_pips:.1f} pips > {target_profit_pips:.1f} pips target"
+        else:  # SELL position
+            current_profit_pips = (entry_price - current_price) * pip_multiplier
+            # Check profit target
+            if current_profit_pips >= target_profit_pips:
+                return True, f"SELL position profit target reached: {current_profit_pips:.1f} pips > {target_profit_pips:.1f} pips target"
         
+        # Check for RSI divergence
+        if check_rsi_divergence(dfs, position_type):
+            return True, f"RSI divergence detected while in profit for {position_type} position"
+    
+    return False, ""
+
+def check_rsi_divergence(dfs, position_type):
+    """
+    Check for RSI divergence:
+    - For BUY: Price making higher highs but RSI making lower highs
+    - For SELL: Price making lower lows but RSI making higher lows
+    
+    Args:
+        dfs: DataFrame with price data and indicators
+        position_type: "BUY" or "SELL"
+        
+    Returns:
+        True if divergence is detected, False otherwise
+    """
+    # Need at least 5 candles to detect divergence
+    if len(dfs) < 5:
         return False
     
+    # Check last 5 candles for divergence
+    last_candles = dfs.iloc[-5:].copy()
+    
+    if position_type == "BUY":
+        # Look for bearish divergence (price higher high, RSI lower high)
+        # First, check if price is making higher highs
+        price_higher_high = last_candles['high'].iloc[-1] > last_candles['high'].iloc[-3]
+        
+        # Now check if RSI is making lower highs
+        rsi_lower_high = last_candles['RSI'].iloc[-1] < last_candles['RSI'].iloc[-3]
+        
+        # Return True if both conditions are met (bearish divergence)
+        return price_higher_high and rsi_lower_high
+    else:  # SELL
+        # Look for bullish divergence (price lower low, RSI higher low)
+        # First, check if price is making lower lows
+        price_lower_low = last_candles['low'].iloc[-1] < last_candles['low'].iloc[-3]
+        
+        # Now check if RSI is making higher lows
+        rsi_higher_low = last_candles['RSI'].iloc[-1] > last_candles['RSI'].iloc[-3]
+        
+        # Return True if both conditions are met (bullish divergence)
+        return price_lower_low and rsi_higher_low
+
+def apply_contingency_plan(forex_pair, closed_positions, latest_indicators):
+    """
+    Apply the contingency plan after closing profitable positions:
+    
+    For BUY:
+    1. Set sell stop at 21 SMA with 2x initial lot size
+    2. If activated, set buy limit at initial entry with 3x initial lot size
+    
+    For SELL:
+    1. Set buy stop at 21 SMA with 2x initial lot size
+    2. If activated, set sell limit at initial entry with 3x initial lot size
+    
+    Args:
+        forex_pair: Currency pair symbol
+        closed_positions: List of positions that were closed
+        latest_indicators: Latest indicators
+    """
+    try:
+        if not closed_positions:
+            return
+        
+        # Get the first closed position to determine position type
+        position = closed_positions[0]
+        position_type = "BUY" if position.type == 0 else "SELL"
+        initial_entry_price = position.price_open
+        initial_lot_size = position.volume
+        
+        # Get the 21 SMA value
+        sma_21 = latest_indicators['21_SMA']
+        
+        # Contingency plan
+        if position_type == "BUY":
+            # Step 1: Set sell stop at 21 SMA with 2x initial lot size
+            contingency_lot_size = initial_lot_size * 2
+            logger.info(f"Setting SELL STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            
+            # Set pending order
+            set_pending_order(
+                forex_pair, 
+                "SELL_STOP", 
+                sma_21, 
+                contingency_lot_size,
+                comment="Contingency SELL STOP"
+            )
+            
+            # Store info for step 2 in settings
+            TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
+                "type": "BUY",
+                "initial_entry": initial_entry_price,
+                "initial_lot_size": initial_lot_size,
+                "step": 1
+            }
+            
+        else:  # SELL position
+            # Step 1: Set buy stop at 21 SMA with 2x initial lot size
+            contingency_lot_size = initial_lot_size * 2
+            logger.info(f"Setting BUY STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            
+            # Set pending order
+            set_pending_order(
+                forex_pair, 
+                "BUY_STOP", 
+                sma_21, 
+                contingency_lot_size,
+                comment="Contingency BUY STOP"
+            )
+            
+            # Store info for step 2 in settings
+            TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
+                "type": "SELL",
+                "initial_entry": initial_entry_price,
+                "initial_lot_size": initial_lot_size,
+                "step": 1
+            }
+            
     except Exception as e:
-        log_error(f"Error in execute function for {forex_pair}", e)
+        logger.error(f"Error applying contingency plan for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+
+def set_pending_order(forex_pair, order_type, price, lot_size, comment=""):
+    """
+    Set a pending order
+    
+    Args:
+        forex_pair: Currency pair symbol
+        order_type: "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"
+        price: Price level for the pending order
+        lot_size: Lot size for the order
+        comment: Comment for the order
+        
+    Returns:
+        True if order was placed successfully, False otherwise
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return False
+        
+        # Map order type to MT5 constants
+        order_type_map = {
+            "BUY_LIMIT": mt5.ORDER_TYPE_BUY_LIMIT,
+            "SELL_LIMIT": mt5.ORDER_TYPE_SELL_LIMIT,
+            "BUY_STOP": mt5.ORDER_TYPE_BUY_STOP,
+            "SELL_STOP": mt5.ORDER_TYPE_SELL_STOP
+        }
+        
+        if order_type not in order_type_map:
+            logger.error(f"Invalid order type: {order_type}")
+            return False
+        
+        # Get symbol info
+        symbol_info = mt5.symbol_info(forex_pair)
+        if symbol_info is None:
+            logger.error(f"Failed to get symbol info for {forex_pair}")
+            return False
+        
+        # Make sure the symbol is available
+        if not symbol_info.visible:
+            logger.info(f"Symbol {forex_pair} is not visible, trying to switch on")
+            if not mt5.symbol_select(forex_pair, True):
+                logger.error(f"Failed to select symbol {forex_pair}")
+                return False
+        
+        # Define order parameters
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": forex_pair,
+            "volume": lot_size,
+            "type": order_type_map[order_type],
+            "price": price,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,  # Good Till Cancelled
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Send the order
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"Failed to place {order_type} order for {forex_pair}: {result.comment}")
+            return False
+        
+        logger.info(f"Successfully placed {order_type} order for {forex_pair} at {price}, lot size: {lot_size}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error setting pending order for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
         return False
 
+def check_pending_orders(forex_pair):
+    """
+    Check for pending orders and handle step 2 of contingency plan if needed
+    
+    Args:
+        forex_pair: Currency pair symbol
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        # Skip if no contingency plan is active
+        contingency_key = f"{forex_pair}_contingency"
+        if contingency_key not in TRADING_SETTINGS:
+            return
+        
+        contingency = TRADING_SETTINGS[contingency_key]
+        
+        # Check if we're still in step 1 (waiting for stop order to be triggered)
+        if contingency["step"] != 1:
+            return
+        
+        # Get open positions to see if step 1 stop order was triggered
+        positions = get_open_positions(forex_pair)
+        
+        # If no positions, step 1 order wasn't triggered yet or was already closed
+        if not positions:
+            return
+        
+        # Check if the position matches our expected contingency position
+        # (in opposite direction of original position)
+        expected_position_type = 1 if contingency["type"] == "BUY" else 0  # 0=buy, 1=sell
+        matching_positions = [p for p in positions if p.type == expected_position_type]
+        
+        if not matching_positions:
+            return
+        
+        # Step 1 order was triggered, move to step 2
+        contingency["step"] = 2
+        TRADING_SETTINGS[contingency_key] = contingency
+        
+        initial_entry = contingency["initial_entry"]
+        initial_lot_size = contingency["initial_lot_size"]
+        
+        # Step 2: Place limit order at initial entry with 3x initial lot size
+        if contingency["type"] == "BUY":
+            # For original BUY, we now have a SELL position, so place BUY LIMIT
+            contingency_lot_size = initial_lot_size * 3
+            logger.info(f"Setting BUY LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            
+            set_pending_order(
+                forex_pair, 
+                "BUY_LIMIT", 
+                initial_entry, 
+                contingency_lot_size,
+                comment="Contingency BUY LIMIT"
+            )
+        else:  # SELL position
+            # For original SELL, we now have a BUY position, so place SELL LIMIT
+            contingency_lot_size = initial_lot_size * 3
+            logger.info(f"Setting SELL LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            
+            set_pending_order(
+                forex_pair, 
+                "SELL_LIMIT", 
+                initial_entry, 
+                contingency_lot_size,
+                comment="Contingency SELL LIMIT"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error checking pending orders for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+
+def close_all_positions(forex_pair):
+    """
+    Close all open positions for a currency pair
+    
+    Args:
+        forex_pair: Currency pair symbol
+        
+    Returns:
+        True if all positions were closed successfully, False otherwise
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return False
+        
+        positions = get_open_positions(forex_pair)
+        if not positions:
+            logger.info(f"No open positions for {forex_pair}")
+            return True
+        
+        all_closed = True
+        for position in positions:
+            # Determine position type (buy or sell)
+            position_type = mt5.POSITION_TYPE_BUY if position.type == 0 else mt5.POSITION_TYPE_SELL
+            
+            # Set action type to opposite of position type
+            action_type = mt5.ORDER_TYPE_SELL if position_type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+            
+            # Get symbol info
+            symbol_info = mt5.symbol_info(forex_pair)
+            if symbol_info is None:
+                logger.error(f"Failed to get symbol info for {forex_pair}")
+                all_closed = False
+                continue
+            
+            # Request close
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": forex_pair,
+                "volume": position.volume,
+                "type": action_type,
+                "position": position.ticket,
+                "comment": "Close position",
+                "type_filling": mt5.ORDER_FILLING_IOC
+            }
+            
+            # Use current bid/ask price for closing
+            if action_type == mt5.ORDER_TYPE_SELL:
+                request["price"] = mt5.symbol_info_tick(forex_pair).bid
+            else:
+                request["price"] = mt5.symbol_info_tick(forex_pair).ask
+                
+            # Send the order
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"Failed to close position {position.ticket} for {forex_pair}: {result.comment}")
+                all_closed = False
+            else:
+                logger.info(f"Successfully closed position {position.ticket} for {forex_pair}")
+        
+        return all_closed
+        
+    except Exception as e:
+        logger.error(f"Error closing positions for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return False
 
 def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
     """
     Execute trading strategy for multiple currency pairs
     
     Args:
-        login: MT5 account login (optional, uses config if not provided)
-        password: MT5 account password (optional, uses config if not provided)
-        server: MT5 server name (optional, uses config if not provided)
+        login: MT5 account login
+        password: MT5 account password
+        server: MT5 server name
         interval: Interval between trades in seconds
     """
-    # Use provided parameters or fall back to config values
-    login = login or MT5_SETTINGS["login"]
-    password = password or MT5_SETTINGS["password"]
-    server = server or MT5_SETTINGS["server"]
+    # Initialize MT5
+    if not login_trading(login, password, server):
+        logger.error("Failed to login to MT5")
+        return False
     
-    logger.info("Starting multi-pair trading bot")
+    # Load currency pairs
+    pairs = load_currency_pairs()
+    if not pairs:
+        logger.error("No currency pairs available")
+        return False
     
-    if not initialize_mt5(login, password, server):
-        log_error("Failed to initialize MT5")
-        return
-
+    logger.info(f"Starting trading for {len(pairs)} currency pairs")
+    
     try:
-        # Load currency pairs
-        currency_pairs = load_currency_pairs()
-        if not currency_pairs:
-            log_error("No currency pairs found")
-            return
-            
-        logger.info(f"Trading {len(currency_pairs)} currency pairs: {', '.join(currency_pairs)}")
-        
         while True:
-            for pair in currency_pairs:
-                try:
-                    logger.info(f"Processing {pair}")
-                    execute(pair)
-                except Exception as e:
-                    log_error(f"Error processing {pair}", e)
+            for pair in pairs:
+                logger.info(f"Processing {pair}")
                 
-                # Sleep briefly between pairs to avoid overloading MT5
-                time.sleep(2)
+                # Check pending orders first (for contingency plan)
+                check_pending_orders(pair)
                 
-            # Sleep for the specified interval before the next round
-            logger.info(f"Sleeping for {interval} seconds before next round")
+                # Execute trading strategy
+                execute(pair)
+                
+                # Sleep briefly to avoid rate limits
+                time.sleep(1)
+            
+            logger.info(f"Completed cycle for all pairs, sleeping for {interval} seconds")
             time.sleep(interval)
             
     except KeyboardInterrupt:
-        logger.info("Trading bot stopped by user")
+        logger.info("Trading stopped by user")
+        return True
     except Exception as e:
-        log_error("Unexpected error in trading bot", e)
-    finally:
-        logger.info("Shutting down MT5 connection")
-        shutdown_mt5()
-
+        logger.error(f"Error in multi-pair trading: {e}")
+        logger.error(traceback.format_exc())
+        return False
 
 def start_trading(login=None, password=None, server=None, currency_pair=None):
     """
@@ -280,4 +636,320 @@ def login_trading(login=None, password=None, server=None):
     server = server or MT5_SETTINGS["server"]
     
     logger.info(f"Logging in to MT5 server: {server}")
-    return initialize_mt5(login, password, server) 
+    return initialize_mt5(login, password, server)
+
+def get_open_positions(forex_pair):
+    """
+    Get all open positions for a currency pair
+    
+    Args:
+        forex_pair: Currency pair symbol
+        
+    Returns:
+        List of open positions or empty list if none
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return []
+        
+        # Get all open positions
+        positions = mt5.positions_get(symbol=forex_pair)
+        if positions is None:
+            error = mt5.last_error()
+            if error[0] != 0:
+                logger.error(f"Failed to get positions for {forex_pair}: {error}")
+            return []
+        
+        # Convert to list if needed
+        positions_list = list(positions)
+        logger.debug(f"Found {len(positions_list)} open positions for {forex_pair}")
+        return positions_list
+        
+    except Exception as e:
+        logger.error(f"Error getting open positions for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return []
+
+def calculate_lot_size(forex_pair, stop_loss_distance_points):
+    """
+    Calculate proper lot size based on risk management
+    
+    Formula:
+    Lot Size = Account Risk Amount / (Stop Loss in Pips * Pip Value)
+    
+    Args:
+        forex_pair: Currency pair symbol
+        stop_loss_distance_points: Distance from entry to stop loss in price points
+        
+    Returns:
+        Lot size based on risk management
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return 0.01  # Default minimum lot size
+        
+        # Get account info and symbol info
+        account_info = mt5.account_info()
+        if account_info is None:
+            logger.error(f"Failed to get account info: {mt5.last_error()}")
+            return 0.01
+        
+        symbol_info = mt5.symbol_info(forex_pair)
+        if symbol_info is None:
+            logger.error(f"Failed to get symbol info for {forex_pair}: {mt5.last_error()}")
+            return 0.01
+        
+        # Get current price (average of bid/ask)
+        symbol_tick = mt5.symbol_info_tick(forex_pair)
+        if symbol_tick is None:
+            logger.error(f"Failed to get symbol tick for {forex_pair}: {mt5.last_error()}")
+            return 0.01
+        
+        current_price = (symbol_tick.bid + symbol_tick.ask) / 2
+        
+        # Get risk percentage from settings (default 2%)
+        risk_percentage = TRADING_SETTINGS.get("risk_percentage", 0.02)
+        
+        # Calculate account risk amount
+        account_balance = account_info.balance
+        account_risk_amount = account_balance * risk_percentage
+        logger.debug(f"Account balance: {account_balance}, Risk amount: {account_risk_amount}")
+        
+        # Determine pip value based on currency pair
+        one_pip_movement = 0.01 if forex_pair.endswith('JPY') else 0.0001
+        
+        # Convert point distance to pip distance
+        if not forex_pair.endswith('JPY') and symbol_info.digits == 5:  # 5-digit broker for non-JPY pairs
+            pip_multiplier = 0.1  # 1 pip = 10 points
+        elif forex_pair.endswith('JPY') and symbol_info.digits == 3:  # 3-digit broker for JPY pairs
+            pip_multiplier = 0.1  # 1 pip = 10 points
+        else:
+            pip_multiplier = 1.0  # 1 pip = 1 point (standard 4-digit broker)
+        
+        stop_loss_in_pips = stop_loss_distance_points / pip_multiplier
+        
+        # Calculate pip value (monetary value of 1 pip for 1 standard lot)
+        # Formula: (one_pip / exchange_rate) * lot_size
+        standard_lot = 100000.0  # 1 standard lot
+        
+        # For pairs where account currency is the base currency (e.g., USD/xxx for USD account)
+        # Pip value is fixed (10 USD per pip for 1 standard lot for USD account)
+        account_currency = account_info.currency
+        
+        # Determine if the account currency is the base or quote currency of the pair
+        base_currency = forex_pair[:3]
+        quote_currency = forex_pair[3:]
+        
+        if account_currency == quote_currency:
+            # For pairs like xxx/USD for USD account
+            pip_value_per_lot = one_pip_movement * standard_lot  # Direct calculation
+        else:
+            # For pairs like xxx/yyy for USD account (neither base nor quote is account currency)
+            # or for pairs like USD/yyy for USD account (account currency is base)
+            pip_value_per_lot = (one_pip_movement / current_price) * standard_lot
+            
+            # If account currency is not part of the pair, need to convert using another rate
+            if account_currency != base_currency and account_currency != quote_currency:
+                # Try to find a conversion rate (e.g., via USD/account_currency)
+                # This is simplified - in a real system you'd lookup the actual conversion rate
+                conversion_pair = f"{account_currency}USD"
+                conversion_tick = mt5.symbol_info_tick(conversion_pair)
+                if conversion_tick is not None:
+                    conversion_rate = (conversion_tick.bid + conversion_tick.ask) / 2
+                    pip_value_per_lot *= conversion_rate
+        
+        # Calculate lot size based on risk amount
+        lot_size = account_risk_amount / (stop_loss_in_pips * pip_value_per_lot)
+        
+        # Ensure lot size is within allowed range
+        min_lot_size = symbol_info.volume_min
+        max_lot_size = symbol_info.volume_max
+        lot_size = max(min(lot_size, max_lot_size), min_lot_size)
+        
+        # Round to nearest allowed lot step
+        lot_step = symbol_info.volume_step
+        lot_size = round(lot_size / lot_step) * lot_step
+        
+        logger.info(f"Calculated lot size: {lot_size:.2f}, Stop loss distance: {stop_loss_in_pips:.1f} pips")
+        return lot_size
+        
+    except Exception as e:
+        logger.error(f"Error calculating lot size for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return 0.01  # Default to minimum lot size
+
+def open_buy_trade(forex_pair, lot_size, stop_loss_price):
+    """
+    Open a BUY trade
+    
+    Args:
+        forex_pair: Currency pair symbol
+        lot_size: Lot size for the trade
+        stop_loss_price: Stop loss price level
+        
+    Returns:
+        True if trade was successfully opened, False otherwise
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return False
+        
+        # Get symbol info
+        symbol_info = mt5.symbol_info(forex_pair)
+        if symbol_info is None:
+            logger.error(f"Failed to get symbol info for {forex_pair}")
+            return False
+        
+        # Make sure the symbol is available
+        if not symbol_info.visible:
+            logger.info(f"Symbol {forex_pair} is not visible, trying to switch on")
+            if not mt5.symbol_select(forex_pair, True):
+                logger.error(f"Failed to select symbol {forex_pair}")
+                return False
+        
+        # Get current price
+        symbol_tick = mt5.symbol_info_tick(forex_pair)
+        if symbol_tick is None:
+            logger.error(f"Failed to get symbol tick for {forex_pair}")
+            return False
+        
+        # Define trade request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": forex_pair,
+            "volume": lot_size,
+            "type": mt5.ORDER_TYPE_BUY,
+            "price": symbol_tick.ask,  # Buy at ask price
+            "sl": stop_loss_price,  # Set stop loss
+            "deviation": 10,  # Allow price deviation in points
+            "magic": 234000,  # Magic number to identify trades
+            "comment": "Mario Trader",
+            "type_time": mt5.ORDER_TIME_GTC,  # Good Till Cancelled
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Send the order
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"Failed to place BUY order for {forex_pair}: {result.comment}")
+            return False
+        
+        logger.info(f"Successfully opened BUY trade for {forex_pair}, ticket: {result.order}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error opening BUY trade for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+def open_sell_trade(forex_pair, lot_size, stop_loss_price):
+    """
+    Open a SELL trade
+    
+    Args:
+        forex_pair: Currency pair symbol
+        lot_size: Lot size for the trade
+        stop_loss_price: Stop loss price level
+        
+    Returns:
+        True if trade was successfully opened, False otherwise
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return False
+        
+        # Get symbol info
+        symbol_info = mt5.symbol_info(forex_pair)
+        if symbol_info is None:
+            logger.error(f"Failed to get symbol info for {forex_pair}")
+            return False
+        
+        # Make sure the symbol is available
+        if not symbol_info.visible:
+            logger.info(f"Symbol {forex_pair} is not visible, trying to switch on")
+            if not mt5.symbol_select(forex_pair, True):
+                logger.error(f"Failed to select symbol {forex_pair}")
+                return False
+        
+        # Get current price
+        symbol_tick = mt5.symbol_info_tick(forex_pair)
+        if symbol_tick is None:
+            logger.error(f"Failed to get symbol tick for {forex_pair}")
+            return False
+        
+        # Define trade request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": forex_pair,
+            "volume": lot_size,
+            "type": mt5.ORDER_TYPE_SELL,
+            "price": symbol_tick.bid,  # Sell at bid price
+            "sl": stop_loss_price,  # Set stop loss
+            "deviation": 10,  # Allow price deviation in points
+            "magic": 234000,  # Magic number to identify trades
+            "comment": "Mario Trader",
+            "type_time": mt5.ORDER_TIME_GTC,  # Good Till Cancelled
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Send the order
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"Failed to place SELL order for {forex_pair}: {result.comment}")
+            return False
+        
+        logger.info(f"Successfully opened SELL trade for {forex_pair}, ticket: {result.order}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error opening SELL trade for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+def log_trade(forex_pair, action, price, lot_size, stop_loss):
+    """
+    Log a trade for record keeping
+    
+    Args:
+        forex_pair: Currency pair symbol
+        action: BUY or SELL
+        price: Entry price
+        lot_size: Lot size for the trade
+        stop_loss: Stop loss price
+    """
+    try:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Create trades directory if it doesn't exist
+        trades_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "trades")
+        os.makedirs(trades_dir, exist_ok=True)
+        
+        # Create or append to the trades log file
+        trades_file = os.path.join(trades_dir, f"{forex_pair}_trades.csv")
+        file_exists = os.path.isfile(trades_file)
+        
+        with open(trades_file, "a") as f:
+            if not file_exists:
+                # Write the header row
+                f.write("Time,Pair,Action,Price,LotSize,StopLoss\n")
+            
+            # Write the trade record
+            f.write(f"{current_time},{forex_pair},{action},{price},{lot_size},{stop_loss}\n")
+        
+        logger.info(f"Trade logged: {action} {forex_pair} at {price}, Lot: {lot_size}, SL: {stop_loss}")
+    
+    except Exception as e:
+        logger.error(f"Error logging trade: {e}")
+        logger.error(traceback.format_exc()) 

@@ -1,165 +1,148 @@
 # Mario Trader Beta
 
-An automated trading bot for MetaTrader 5 that implements a trading strategy based on technical indicators.
+A MetaTrader 5 trading bot using an SMA Crossover Strategy with RSI confirmation.
 
 ## Features
 
-- Automated trading on MetaTrader 5
-- Technical analysis using SMA and RSI indicators
-- Risk management with stop loss
-- Contingency trading strategy
-- Multi-currency pair trading support
-- Modular code structure
-- Command-line interface
-- Comprehensive logging
+- **SMA Crossover Strategy with RSI Confirmation**
+  - Uses 21, 50, and 200 SMAs for trend identification
+  - RSI for confirming the trade direction
+  - Candle pattern detection for entry confirmation
 
-## Requirements
+- **Profit-Taking Mechanisms**
+  - RSI divergence detection for exiting profitable trades
+  - Profit target of 2x the entry-to-21SMA distance in pips
+  - Contingency plan for maximizing profit potential
 
-- Python 3.8+
-- MetaTrader 5 platform installed
-- Required Python packages (see requirements.txt)
+- **Risk Management**
+  - 2% risk per trade using proper lot sizing
+  - Pip value calculation for accurate position sizing
+  - Stop loss at the 21 SMA level
+
+- **Multi-Currency Support**
+  - Trade multiple currency pairs simultaneously
+  - Configurable trading interval for each pair
+
+- **Testing Tools**
+  - Debug mode for testing strategy logic
+  - Force buy/sell signals for validating execution
+  - Simulate profitable positions to test profit-taking
+  - Test contingency plan implementation
+
+## Contingency Plan
+
+The strategy includes a sophisticated contingency plan that activates after closing a profitable trade:
+
+### For BUY trades:
+1. When the initial BUY trade is closed in profit:
+   - A SELL STOP order is placed at the 21 SMA level with 2x the initial lot size
+2. If the SELL STOP is triggered:
+   - A BUY LIMIT order is placed at the initial entry point with 3x the initial lot size
+
+### For SELL trades:
+1. When the initial SELL trade is closed in profit:
+   - A BUY STOP order is placed at the 21 SMA level with 2x the initial lot size
+2. If the BUY STOP is triggered:
+   - A SELL LIMIT order is placed at the initial entry point with 3x the initial lot size
+
+Each contingency trade uses an increasing lot size formula: initial lot size × (number of trades + 1).
 
 ## Installation
 
-1. Clone this repository
 2. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Make sure MetaTrader 5 is installed and configured
-
-### Development Installation
-
-For development, you can install the package in development mode:
-
-```
-pip install -e .
+```bash
+pip install -r requirements.txt
 ```
 
-This will install the package in editable mode, allowing you to make changes to the code without reinstalling.
-
-## Project Structure
-
-```
-mario_trader_beta/
-├── main.py                  # Main entry point with CLI
-├── requirements.txt         # Python dependencies
-├── README.md                # This file
-└── mario_trader/            # Main package
-    ├── __init__.py
-    ├── config.py            # Configuration settings
-    ├── execution.py         # Trade execution logic
-    ├── indicators/          # Technical indicators
-    │   ├── __init__.py
-    │   └── technical.py     # RSI, SMA, etc.
-    ├── strategies/          # Trading strategies
-    │   ├── __init__.py
-    │   ├── monitor.py       # Trade monitoring
-    │   └── signal.py        # Signal generation
-    └── utils/               # Utility functions
-        ├── __init__.py
-        ├── logger.py        # Logging utilities
-        └── mt5_handler.py   # MetaTrader 5 operations
-```
-
-## Usage
-
-The bot can be controlled via command-line interface using either `main.py` or the more convenient `run.py` script.
-
-### Using run.py (Recommended)
-
-The `run.py` script provides a simplified interface:
-
-```
-python run.py start           # Start trading with a single pair
-python run.py start-multi     # Start trading with multiple pairs
-python run.py login           # Test MT5 login
-python run.py info            # Display configuration information
-python run.py test            # Run tests
-```
-
-With parameters:
-
-```
-python run.py start --pair EURUSD --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
-python run.py start-multi --interval 120 --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
-```
-
-### Using main.py
-
-Alternatively, you can use the main.py script directly:
-
-### Display Configuration Information
-
-```
-python main.py info
-```
-
-To see available currency pairs:
-
-```
-python main.py info --pairs
-```
-
-### List Available Currency Pairs
-
-```
-python main.py list-pairs
-```
-
-### Test MT5 Login
-
-```
-python main.py login
-```
-
-You can provide custom login credentials:
-
-```
-python main.py login --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
-```
-
-### Start the Trading Bot
-
-For a single currency pair:
-
-```
-python main.py start
-```
-
-With custom parameters:
-
-```
-python main.py start --pair EURUSD --login YOUR_LOGIN --password YOUR_PASSWORD --server YOUR_SERVER
-```
-
-For multiple currency pairs (trades all pairs in currency_pair_list.txt):
-
-```
-python main.py start --multi
-```
-
-With custom interval between trading cycles:
-
-```
-python main.py start --multi --interval 120
-```
+3. Make sure MetaTrader 5 is installed and running on your system.
 
 ## Configuration
 
-You can modify the configuration settings in `mario_trader/config.py`:
+1. Edit the `mario_trader/config.py` file to set your MT5 login credentials:
+```python
+MT5_SETTINGS = {
+    "login": 12345678,  # Your MT5 account login
+    "password": "your_password",  # Your MT5 account password
+    "server": "MetaQuotes-Demo",  # MT5 server name
+}
+```
 
-- MT5 connection settings (login, password, server)
-- Trading settings (currency pair, risk percentage, timeframe)
-- Technical indicator settings (RSI period, SMA periods)
-- Contingency trade settings
-- Order settings
-- Logging settings
+2. Create a `currency_pair_list.txt` file in the project root directory with the currency pairs you want to trade, one per line:
+```
+EURUSD
+GBPUSD
+USDJPY
+```
 
-## Logging
+3. Adjust the trading settings in `mario_trader/config.py` if needed.
 
-The bot logs all activities to both console and a log file (default: mario_trader.log). You can configure logging settings in `mario_trader/config.py`.
+## Usage
 
-## Disclaimer
+### Start the bot:
+```bash
+python main.py start
+```
 
-This trading bot is provided for educational purposes only. Use at your own risk. Trading in financial markets involves substantial risk of loss. 
+### Start with a specific currency pair:
+```bash
+python main.py start --pair EURUSD
+```
+
+### Start in multi-pair mode:
+```bash
+python main.py start --multi
+```
+
+### Test MT5 login credentials:
+```bash
+python main.py login
+```
+
+### Display configuration information:
+```bash
+python main.py info
+```
+
+### List available currency pairs:
+```bash
+python main.py list-pairs
+```
+
+### Check if MetaTrader 5 is properly installed:
+```bash
+python main.py check-mt5
+```
+
+### Test the profit-taking mechanism:
+```bash
+python test_profit_taking.py --pair EURUSD --debug
+```
+
+### Test the contingency plan:
+```bash
+python test_profit_taking.py --pair EURUSD --test-contingency
+```
+
+## Strategy Logic
+
+The SMA Crossover strategy with RSI confirmation works as follows:
+
+### BUY Signal Criteria:
+- Price is above the 200 SMA
+- Pattern of 3+ consecutive SELL candles followed by a BUY candle
+- RSI is above 50
+- Sufficient separation between 21 and 50 SMAs
+
+### SELL Signal Criteria:
+- Price is below the 200 SMA
+- Pattern of 3+ consecutive BUY candles followed by a SELL candle
+- RSI is below 50
+- Sufficient separation between 21 and 50 SMAs
+
+### Exit Criteria:
+- RSI divergence detected while in profit
+- Profit target reached (2x the distance from entry to 21 SMA in pips)
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
