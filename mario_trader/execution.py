@@ -55,7 +55,12 @@ def execute(forex_pair):
         if consecutive_buys:
             logger.debug(f"{forex_pair} - Found 3 consecutive buy candles")
             
-        signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair)
+        # Get debug mode setting from configuration
+        debug_mode = TRADING_SETTINGS.get("debug_mode", False)
+        if debug_mode:
+            logger.info(f"Running in DEBUG MODE - strategy conditions may be relaxed for {forex_pair}")
+            
+        signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair, debug_mode)
         
         # Log the signal
         signal_type = "BUY" if signal == 1 else "SELL" if signal == -1 else "NONE"

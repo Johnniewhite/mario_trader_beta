@@ -55,6 +55,47 @@ For multiple currency pairs:
 python main.py start --multi
 ```
 
+## Testing
+
+A special test script is provided to help test the strategy and diagnose issues:
+
+```bash
+# Test on the default currency pair
+python test_strategy.py
+
+# Test on a specific currency pair
+python test_strategy.py --pair EURUSD
+
+# Test with debug mode (relaxes conditions to force signals)
+python test_strategy.py --pair XRPUSD --debug
+```
+
+### Debug Mode
+
+The strategy includes a debug mode that can be enabled to help with testing. When debug mode is enabled, some of the strict conditions are relaxed to make it easier to generate signals for testing purposes.
+
+To enable debug mode, you can:
+
+1. Use the `--debug` flag with the test script
+2. Set `debug_mode` to `True` in the `TRADING_SETTINGS` section of `mario_trader/config.py`
+
+## Troubleshooting
+
+If the strategy isn't executing trades at the right points, check the following:
+
+1. Look at the log file (`mario_trader.log`) for detailed information about:
+   - The candle patterns (shown as a sequence of + and - characters)
+   - Individual condition results for each signal requirement
+   - "Almost" signals that were close but didn't meet all criteria
+
+2. Common issues:
+   - Not enough consecutive candles in the required pattern
+   - RSI conditions not met (above 50 for buy, below 50 for sell)
+   - Price not on the correct side of the 200 SMA
+   - Insufficient separation between 21-day and 50-day SMAs
+
+3. If you see "Almost" signal logs, these indicate which specific condition prevented the signal from being generated.
+
 ## Customization
 
 You can customize the strategy by modifying the following parameters in the `mario_trader/strategies/sma_crossover_strategy.py` file:

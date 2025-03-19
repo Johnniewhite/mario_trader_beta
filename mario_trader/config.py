@@ -18,6 +18,7 @@ TRADING_SETTINGS = {
     "multi_pair_interval": 60,  # Seconds between trading cycles in multi-pair mode
     "max_open_positions": 5,  # Maximum number of open positions at once
     "max_daily_trades": 20,  # Maximum number of trades per day
+    "debug_mode": False,  # Set to True to relax strategy conditions for testing
 }
 
 # Technical Indicator Settings
