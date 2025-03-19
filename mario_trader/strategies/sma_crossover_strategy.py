@@ -50,38 +50,48 @@ def check_price_crossed_200sma_recently(df, lookback=10):
 
 def check_consecutive_candles(df, direction, count=3):
     """
-    Check for consecutive candles in the specified direction
+    Check for consecutive candles in the specified direction followed by opposite direction
     
     Args:
         df: DataFrame with price data
-        direction: 1 for buy candles, -1 for sell candles
-        count: Number of consecutive candles to check for
+        direction: 1 for checking buy candles followed by sell, -1 for checking sell candles followed by buy
+        count: Number of consecutive candles required for a signal
         
     Returns:
-        True if there are count consecutive candles in the specified direction, False otherwise
+        True if the pattern is detected, False otherwise
     """
-    # Add candle direction (1 for bullish, -1 for bearish)
+    # Add candle direction (1 for bullish, -1 for bearish) if not already present
     if 'direction' not in df.columns:
         df['direction'] = np.sign(df['close'] - df['open'])
     
-    # Log recent candle directions for debugging
-    recent_candles = []
-    for i in range(1, min(count+3, len(df))):
-        candle_dir = df['direction'].iloc[-i]
-        recent_candles.append(str(candle_dir))
+    if len(df) < count + 1:
+        # Not enough data
+        return False
     
-    # Get the most recent candles (excluding the current one) for pattern checking
-    recent_pattern = "-".join(recent_candles)
+    # Get the current candle direction (most recent)
+    current_direction = df['direction'].iloc[-1]
     
-    # Check for exactly count consecutive candles of the specified direction
-    consecutive_count = 0
-    for i in range(2, min(count+5, len(df))):
-        if df['direction'].iloc[-i] == direction:
-            consecutive_count += 1
-        else:
-            break
+    # For a buy signal (direction=-1), we need:
+    # 1. Current candle is bullish (direction=1)
+    # 2. Previous 'count' candles are all bearish (direction=-1)
+    if direction == -1 and current_direction == 1:
+        # Check if previous 'count' candles are all bearish
+        for i in range(2, count+2):  # Starting from 2nd most recent candle
+            if i > len(df) or df['direction'].iloc[-i] != -1:
+                return False
+        return True
     
-    return consecutive_count >= count
+    # For a sell signal (direction=1), we need:
+    # 1. Current candle is bearish (direction=-1)
+    # 2. Previous 'count' candles are all bullish (direction=1)
+    elif direction == 1 and current_direction == -1:
+        # Check if previous 'count' candles are all bullish
+        for i in range(2, count+2):  # Starting from 2nd most recent candle
+            if i > len(df) or df['direction'].iloc[-i] != 1:
+                return False
+        return True
+    
+    return False
 
 
 def log_candle_pattern(df, currency_pair):
@@ -111,6 +121,7 @@ def log_candle_pattern(df, currency_pair):
     logger.debug(f"{currency_pair} - Recent candle pattern (right=newest): {pattern}")
     
     # Check and log specific patterns
+    # Modified to match our actual requirements better
     if pattern.endswith("---+"):
         logger.debug(f"{currency_pair} - Detected 3 sell candles followed by a buy candle")
     if pattern.endswith("+++-"):
@@ -154,15 +165,20 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
     # Log candle pattern
     log_candle_pattern(df, currency_pair)
     
-    # Check for consecutive candles
-    consecutive_sells = check_consecutive_candles(df, -1, 3)
-    consecutive_buys = check_consecutive_candles(df, 1, 3)
+    # Check for consecutive candles pattern
+    # For a buy signal: 3+ consecutive SELL candles followed by a BUY candle
+    buy_pattern = check_consecutive_candles(df, -1, 3)
+    
+    # For a sell signal: 3+ consecutive BUY candles followed by a SELL candle
+    sell_pattern = check_consecutive_candles(df, 1, 3)
+    
+    # Current candle direction
     current_candle_is_buy = df['direction'].iloc[-1] == 1
     current_candle_is_sell = df['direction'].iloc[-1] == -1
     
     # Log consecutive candle checks
-    logger.debug(f"{currency_pair} - 3+ consecutive sell candles: {consecutive_sells}")
-    logger.debug(f"{currency_pair} - 3+ consecutive buy candles: {consecutive_buys}")
+    logger.debug(f"{currency_pair} - Buy pattern (3+ sell candles followed by buy): {buy_pattern}")
+    logger.debug(f"{currency_pair} - Sell pattern (3+ buy candles followed by sell): {sell_pattern}")
     logger.debug(f"{currency_pair} - Current candle is buy: {current_candle_is_buy}")
     logger.debug(f"{currency_pair} - Current candle is sell: {current_candle_is_sell}")
     
@@ -187,14 +203,15 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
             stop_loss = current_market_price - stop_loss_distance
             return 1, stop_loss, current_market_price
     
-    if price_above_200sma and sufficient_separation and consecutive_sells and current_candle_is_buy and rsi_above_50:
+    # Check for BUY signal with all conditions
+    if price_above_200sma and sufficient_separation and buy_pattern and rsi_above_50:
         # Calculate stop loss based on recent swing low or a percentage of price
         stop_loss_distance = abs(latest['21_SMA'] - current_market_price)
         stop_loss = current_market_price - stop_loss_distance
         
         # Log signal information
         logger.info(f"BUY SIGNAL GENERATED: {currency_pair}")
-        logger.info(f"3+ consecutive sell candles: {consecutive_sells}")
+        logger.info(f"Buy pattern found: {buy_pattern}")
         logger.info(f"Current candle is buy: {current_candle_is_buy}")
         logger.info(f"RSI > 50: {latest['RSI']:.2f}")
         logger.info(f"Price > 200 SMA: {latest['close']:.5f} > {latest['200_SMA']:.5f}")
@@ -222,14 +239,15 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
             stop_loss = current_market_price + stop_loss_distance
             return -1, stop_loss, current_market_price
     
-    if price_below_200sma and sufficient_separation and consecutive_buys and current_candle_is_sell and rsi_below_50:
+    # Check for SELL signal with all conditions
+    if price_below_200sma and sufficient_separation and sell_pattern and rsi_below_50:
         # Calculate stop loss based on recent swing high or a percentage of price
         stop_loss_distance = abs(latest['21_SMA'] - current_market_price)
         stop_loss = current_market_price + stop_loss_distance
         
         # Log signal information
         logger.info(f"SELL SIGNAL GENERATED: {currency_pair}")
-        logger.info(f"3+ consecutive buy candles: {consecutive_buys}")
+        logger.info(f"Sell pattern found: {sell_pattern}")
         logger.info(f"Current candle is sell: {current_candle_is_sell}")
         logger.info(f"RSI < 50: {latest['RSI']:.2f}")
         logger.info(f"Price < 200 SMA: {latest['close']:.5f} < {latest['200_SMA']:.5f}")
@@ -237,10 +255,16 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
         return -1, stop_loss, current_market_price
     
     # If any conditions were close but not met, log them for debugging
-    if price_above_200sma and consecutive_sells and current_candle_is_buy and not rsi_above_50:
+    if price_above_200sma and sufficient_separation and current_candle_is_buy and not rsi_above_50:
         logger.debug(f"{currency_pair} - Almost BUY signal but RSI not > 50: {latest['RSI']:.2f}")
     
-    if price_below_200sma and consecutive_buys and current_candle_is_sell and not rsi_below_50:
+    if price_above_200sma and sufficient_separation and rsi_above_50 and not buy_pattern:
+        logger.debug(f"{currency_pair} - Almost BUY signal but missing correct candle pattern")
+    
+    if price_below_200sma and sufficient_separation and current_candle_is_sell and not rsi_below_50:
         logger.debug(f"{currency_pair} - Almost SELL signal but RSI not < 50: {latest['RSI']:.2f}")
+    
+    if price_below_200sma and sufficient_separation and rsi_below_50 and not sell_pattern:
+        logger.debug(f"{currency_pair} - Almost SELL signal but missing correct candle pattern")
     
     return 0, 0, current_market_price 

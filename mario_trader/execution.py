@@ -60,7 +60,25 @@ def execute(forex_pair):
         if debug_mode:
             logger.info(f"Running in DEBUG MODE - strategy conditions may be relaxed for {forex_pair}")
             
-        signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair, debug_mode)
+        # Force specific signal if requested (for testing)
+        force_buy = TRADING_SETTINGS.get("force_buy", False)
+        force_sell = TRADING_SETTINGS.get("force_sell", False)
+        
+        if force_buy:
+            logger.info(f"FORCING BUY SIGNAL for {forex_pair} (testing mode)")
+            current_market_price = latest['close']
+            stop_loss_distance = abs(latest_with_indicators['21_SMA'] - current_market_price)
+            stop_loss_value = current_market_price - stop_loss_distance
+            signal = 1
+        elif force_sell:
+            logger.info(f"FORCING SELL SIGNAL for {forex_pair} (testing mode)")
+            current_market_price = latest['close']
+            stop_loss_distance = abs(latest_with_indicators['21_SMA'] - current_market_price)
+            stop_loss_value = current_market_price + stop_loss_distance
+            signal = -1
+        else:
+            # Normal signal generation
+            signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair, debug_mode)
         
         # Log the signal
         signal_type = "BUY" if signal == 1 else "SELL" if signal == -1 else "NONE"

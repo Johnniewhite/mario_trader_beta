@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description='Test the SMA Crossover Strategy')
     parser.add_argument('--pair', type=str, help='Currency pair to test')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode to force signals')
+    parser.add_argument('--force', choices=['buy', 'sell'], help='Force a specific signal type for testing')
     
     args = parser.parse_args()
     
@@ -53,6 +54,15 @@ def main():
         
     print("Successfully connected to MT5 server.")
     
+    # Force specific signal type if requested
+    if args.force:
+        if args.force == "buy":
+            print("Forcing BUY signal for testing")
+            TRADING_SETTINGS["force_buy"] = True
+        elif args.force == "sell":
+            print("Forcing SELL signal for testing")
+            TRADING_SETTINGS["force_sell"] = True
+    
     try:
         # Execute the strategy
         print(f"Testing strategy on {currency_pair}...")
@@ -64,6 +74,11 @@ def main():
         else:
             print(f"\nNo trade signal was generated for {currency_pair}.")
             print("Check the log file for detailed information on why no signal was generated.")
+            print("\nCommon reasons for no signal:")
+            print("1. No consecutive candle pattern as required (3+ sell candles followed by buy, or 3+ buy candles followed by sell)")
+            print("2. RSI conditions not met (above 50 for buy, below 50 for sell)")
+            print("3. Price not on the correct side of 200 SMA (above for buy, below for sell)")
+            print("4. Insufficient separation between 21 and 50 SMAs")
             
         return 0
         
