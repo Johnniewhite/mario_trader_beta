@@ -42,7 +42,7 @@ MT5_SETTINGS = {
 TRADING_SETTINGS = {
     "default_currency_pair": get_default_pair(),
     "risk_percentage": 0.02,  # 2% risk per trade
-    "timeframe": mt5.TIMEFRAME_H1,  # 1-hour timeframe
+    "timeframe": mt5.TIMEFRAME_M5,  # 1-hour timeframe
     "candles_count": 200,  # Number of candles to fetch
     "rsi_period": 14,  # RSI indicator period
     "rsi_overbought": 70,  # RSI overbought level
