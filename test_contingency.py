@@ -29,8 +29,8 @@ from mario_trader.execution import (
     login_trading, execute, check_exit_conditions,
     get_open_positions, check_pending_orders
 )
-from mario_trader.indicators import fetch_data, calculate_indicators
-from mario_trader.indicators.technical import detect_support_resistance, find_nearest_level
+from mario_trader.utils.mt5_handler import fetch_data
+from mario_trader.indicators.technical import calculate_indicators, detect_support_resistance, find_nearest_level
 from mario_trader.utils.currency_pairs import validate_currency_pair, get_default_pair
 
 def parse_arguments():

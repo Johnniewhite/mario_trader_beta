@@ -35,7 +35,8 @@ from mario_trader.execution import (
     apply_contingency_plan, get_open_positions
 )
 from mario_trader.utils.currency_pairs import validate_currency_pair, get_default_pair
-from mario_trader.indicators import fetch_data, calculate_indicators
+from mario_trader.utils.mt5_handler import fetch_data
+from mario_trader.indicators.technical import calculate_indicators
 
 def parse_arguments():
     """Parse command-line arguments"""

@@ -19,7 +19,6 @@ from mario_trader.indicators.technical import calculate_indicators, detect_suppo
 from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
-from mario_trader.indicators import fetch_data, calculate_indicators
 from mario_trader.strategies.sma_crossover_strategy import generate_sma_crossover_signal as generate_signal
 
 
