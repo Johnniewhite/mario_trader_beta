@@ -9,15 +9,20 @@ A MetaTrader 5 trading bot using an SMA Crossover Strategy with RSI confirmation
   - RSI for confirming the trade direction
   - Candle pattern detection for entry confirmation
 
-- **Profit-Taking Mechanisms**
+- **Advanced Exit Strategies**
   - RSI divergence detection for exiting profitable trades
-  - Profit target of 2x the entry-to-21SMA distance in pips
-  - Contingency plan for maximizing profit potential
+  - Support and resistance level detection for smart exits
+  - Trailing stop loss based on key technical levels
+
+- **Sophisticated Contingency Plan**
+  - Simultaneous entry with stop orders for initial trade management
+  - 3x stop and 2x profit targets automatically calculated
+  - Cascading trade entries with increasing lot sizes
 
 - **Risk Management**
   - 2% risk per trade using proper lot sizing
   - Pip value calculation for accurate position sizing
-  - Stop loss at the 21 SMA level
+  - Stop loss placement at key technical levels
 
 - **Multi-Currency Support**
   - Trade multiple currency pairs simultaneously
@@ -26,28 +31,47 @@ A MetaTrader 5 trading bot using an SMA Crossover Strategy with RSI confirmation
 - **Testing Tools**
   - Debug mode for testing strategy logic
   - Force buy/sell signals for validating execution
-  - Simulate profitable positions to test profit-taking
-  - Test contingency plan implementation
+  - Support/resistance level detection and visualization
+  - Monitoring tool for tracking positions and pending orders
 
-## Contingency Plan
+## Contingency Plan Implementation
 
-The strategy includes a sophisticated contingency plan that activates after closing a profitable trade:
+The new contingency plan implements a sophisticated trading approach:
 
-### For BUY trades:
-1. When the initial BUY trade is closed in profit:
-   - A SELL STOP order is placed at the 21 SMA level with 2x the initial lot size
-2. If the SELL STOP is triggered:
-   - A BUY LIMIT order is placed at the initial entry point with 3x the initial lot size
+### Initial Entry:
+1. When a BUY or SELL signal is generated, two orders are placed simultaneously:
+   - The main trade in the signal direction with no initial stop loss
+   - A stop order at the 21 SMA with 2x the lot size of the main trade
 
-### For SELL trades:
-1. When the initial SELL trade is closed in profit:
-   - A BUY STOP order is placed at the 21 SMA level with 2x the initial lot size
-2. If the BUY STOP is triggered:
-   - A SELL LIMIT order is placed at the initial entry point with 3x the initial lot size
+### When Stop Order is Triggered:
+2. If the stop order gets activated (price reaches 21 SMA):
+   - A limit order is placed at the initial entry point with 3x the initial lot size
+   
+### Lot Size Progression:
+- Initial Trade: Base lot size calculated using 2% risk rule
+- First Stop Order: 2x initial lot size
+- Limit Order: 3x initial lot size
+- Each subsequent order: initial lot size × (number of trades + 1)
 
-Each contingency trade uses an increasing lot size formula: initial lot size × (number of trades + 1).
+### Exit Conditions:
+- RSI divergence detection (price and RSI moving in opposite directions)
+- Price returning to support (for BUY positions) or resistance (for SELL positions) levels
+- These exits are only triggered when the position is in profit
+
+## Support and Resistance Detection
+
+The system identifies key support and resistance levels using:
+- Local price minima/maxima detection within a 20-candle window
+- Level grouping with dynamic tolerance for nearby price points
+- Automatic ranking of levels by significance (frequency and recency)
 
 ## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/mario_trader_beta.git
+cd mario_trader_beta
+```
 
 2. Install the required packages:
 ```bash
@@ -93,6 +117,11 @@ python main.py start --pair EURUSD
 python main.py start --multi
 ```
 
+### Test the contingency plan implementation:
+```bash
+python test_contingency.py --pair EURUSD --force-buy --monitor
+```
+
 ### Test MT5 login credentials:
 ```bash
 python main.py login
@@ -113,16 +142,6 @@ python main.py list-pairs
 python main.py check-mt5
 ```
 
-### Test the profit-taking mechanism:
-```bash
-python test_profit_taking.py --pair EURUSD --debug
-```
-
-### Test the contingency plan:
-```bash
-python test_profit_taking.py --pair EURUSD --test-contingency
-```
-
 ## Strategy Logic
 
 The SMA Crossover strategy with RSI confirmation works as follows:
@@ -141,7 +160,7 @@ The SMA Crossover strategy with RSI confirmation works as follows:
 
 ### Exit Criteria:
 - RSI divergence detected while in profit
-- Profit target reached (2x the distance from entry to 21 SMA in pips)
+- Price returning to support/resistance levels while in profit
 
 ## License
 

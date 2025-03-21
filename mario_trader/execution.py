@@ -5,16 +5,22 @@ import math
 import time
 import MetaTrader5 as mt5
 import numpy as np
+import os
+import sys
+import traceback
+from datetime import datetime
 from mario_trader.utils.mt5_handler import (
     fetch_data, get_balance, get_contract_size, open_trade, initialize_mt5, shutdown_mt5,
     get_current_price, close_trade
 )
 from mario_trader.strategies.signal import generate_signal
 from mario_trader.strategies.monitor import monitor_trade
-from mario_trader.indicators.technical import calculate_indicators
+from mario_trader.indicators.technical import calculate_indicators, detect_support_resistance, find_nearest_level
 from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
+from mario_trader.indicators import fetch_data, calculate_indicators
+from mario_trader.strategies.sma_crossover_strategy import generate_sma_crossover_signal as generate_signal
 
 
 def execute(forex_pair):
@@ -44,6 +50,9 @@ def execute(forex_pair):
         logger.debug(f"{forex_pair} - Price: {latest['close']}, 200 SMA: {latest_with_indicators['200_SMA']:.2f}")
         logger.debug(f"{forex_pair} - 21 SMA: {latest_with_indicators['21_SMA']:.2f}, 50 SMA: {latest_with_indicators['50_SMA']:.2f}")
         logger.debug(f"{forex_pair} - RSI: {latest_with_indicators['RSI']:.2f}")
+        
+        # Detect support and resistance levels
+        support_resistance_levels = detect_support_resistance(dfs)
         
         # Check for consecutive candles
         dfs['direction'] = np.sign(dfs['close'] - dfs['open'])
@@ -82,7 +91,8 @@ def execute(forex_pair):
             return False
             
         # Calculate lot size based on risk management
-        stop_loss_distance_points = abs(current_market_price - stop_loss_value)
+        sma_21 = latest_with_indicators['21_SMA']
+        stop_loss_distance_points = abs(current_market_price - sma_21)
         lot_size = calculate_lot_size(forex_pair, stop_loss_distance_points)
         
         # Check for open positions
@@ -92,16 +102,11 @@ def execute(forex_pair):
         if open_positions:
             logger.info(f"Found {len(open_positions)} open positions for {forex_pair}")
             
-            # Check if we need to exit based on profit targets or RSI divergence
-            should_exit, exit_reason = check_exit_conditions(forex_pair, dfs, open_positions)
+            # Check if we need to exit based on RSI divergence or support/resistance
+            should_exit, exit_reason = check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_levels)
             if should_exit:
                 logger.info(f"Exiting positions for {forex_pair}: {exit_reason}")
                 close_all_positions(forex_pair)
-                
-                # Apply contingency plan if exits were in profit
-                if "profit" in exit_reason.lower():
-                    apply_contingency_plan(forex_pair, open_positions, latest_with_indicators)
-                
                 return True
             
             # If we have open positions but no exit, don't enter new ones in same direction
@@ -112,16 +117,66 @@ def execute(forex_pair):
         
         # Execute trade
         if signal == 1:  # BUY
-            trade_result = open_buy_trade(forex_pair, lot_size, stop_loss_value)
+            # Don't set a stop loss initially, but set a sell stop at 21 SMA
+            trade_result = open_buy_trade_without_sl(forex_pair, lot_size)
             if trade_result:
-                logger.info(f"BUY trade executed for {forex_pair} at {current_market_price}, SL: {stop_loss_value}, Lot size: {lot_size}")
-                log_trade(forex_pair, "BUY", current_market_price, lot_size, stop_loss_value)
+                # Get ticket number of the opened trade
+                ticket = trade_result.order
+                
+                # Set sell stop at 21 SMA with 2x initial lot size
+                contingency_lot_size = lot_size * 2
+                logger.info(f"Setting SELL STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+                
+                # Set pending order
+                set_pending_order(
+                    forex_pair, 
+                    "SELL_STOP", 
+                    sma_21, 
+                    contingency_lot_size,
+                    comment="Initial SELL STOP"
+                )
+                
+                # Store info for step 2 in settings
+                TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
+                    "type": "BUY",
+                    "initial_entry": current_market_price,
+                    "initial_lot_size": lot_size,
+                    "step": 1
+                }
+                
+                logger.info(f"BUY trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                log_trade(forex_pair, "BUY", current_market_price, lot_size, None)
                 return True
         elif signal == -1:  # SELL
-            trade_result = open_sell_trade(forex_pair, lot_size, stop_loss_value)
+            # Don't set a stop loss initially, but set a buy stop at 21 SMA
+            trade_result = open_sell_trade_without_sl(forex_pair, lot_size)
             if trade_result:
-                logger.info(f"SELL trade executed for {forex_pair} at {current_market_price}, SL: {stop_loss_value}, Lot size: {lot_size}")
-                log_trade(forex_pair, "SELL", current_market_price, lot_size, stop_loss_value)
+                # Get ticket number of the opened trade
+                ticket = trade_result.order
+                
+                # Set buy stop at 21 SMA with 2x initial lot size
+                contingency_lot_size = lot_size * 2
+                logger.info(f"Setting BUY STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+                
+                # Set pending order
+                set_pending_order(
+                    forex_pair, 
+                    "BUY_STOP", 
+                    sma_21, 
+                    contingency_lot_size,
+                    comment="Initial BUY STOP"
+                )
+                
+                # Store info for step 2 in settings
+                TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
+                    "type": "SELL",
+                    "initial_entry": current_market_price,
+                    "initial_lot_size": lot_size,
+                    "step": 1
+                }
+                
+                logger.info(f"SELL trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                log_trade(forex_pair, "SELL", current_market_price, lot_size, None)
                 return True
         
         logger.warning(f"Failed to execute {signal_type} trade for {forex_pair}")
@@ -132,16 +187,17 @@ def execute(forex_pair):
         logger.error(traceback.format_exc())
         return False
 
-def check_exit_conditions(forex_pair, dfs, open_positions):
+def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_levels=None):
     """
     Check if we should exit existing positions based on:
-    1. RSI divergence
-    2. Profit is 2x the distance from entry to 21 SMA in pips
+    1. RSI divergence when in profit
+    2. Price reaching support/resistance levels when in profit
     
     Args:
         forex_pair: Currency pair symbol
         dfs: DataFrame with price data and indicators
         open_positions: List of open positions
+        support_resistance_levels: Support and resistance levels
         
     Returns:
         (should_exit, reason): Tuple with exit decision and reason
@@ -170,23 +226,34 @@ def check_exit_conditions(forex_pair, dfs, open_positions):
             pip_multiplier = 10000.0
         
         entry_to_sma_distance_pips = abs(entry_price - sma_21) * pip_multiplier
-        target_profit_pips = entry_to_sma_distance_pips * 2
         
         # Check if in profit
+        is_in_profit = False
         if position_type == "BUY":
             current_profit_pips = (current_price - entry_price) * pip_multiplier
-            # Check profit target
-            if current_profit_pips >= target_profit_pips:
-                return True, f"BUY position profit target reached: {current_profit_pips:.1f} pips > {target_profit_pips:.1f} pips target"
+            is_in_profit = current_profit_pips > 0
         else:  # SELL position
             current_profit_pips = (entry_price - current_price) * pip_multiplier
-            # Check profit target
-            if current_profit_pips >= target_profit_pips:
-                return True, f"SELL position profit target reached: {current_profit_pips:.1f} pips > {target_profit_pips:.1f} pips target"
+            is_in_profit = current_profit_pips > 0
         
-        # Check for RSI divergence
-        if check_rsi_divergence(dfs, position_type):
-            return True, f"RSI divergence detected while in profit for {position_type} position"
+        # Only check exit conditions if in profit
+        if is_in_profit:
+            # Check for RSI divergence
+            if check_rsi_divergence(dfs, position_type):
+                return True, f"RSI divergence detected while in profit for {position_type} position"
+            
+            # Check if price has reached support/resistance level
+            if support_resistance_levels and len(support_resistance_levels['support']) > 0 and len(support_resistance_levels['resistance']) > 0:
+                if position_type == "BUY":
+                    # For BUY, check if price has returned to support
+                    nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
+                    if nearest_support and abs(current_price - nearest_support) < 0.0005:  # Within 5 pips
+                        return True, f"BUY position price has returned to support level: {nearest_support:.5f}"
+                else:  # SELL
+                    # For SELL, check if price has returned to resistance
+                    nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
+                    if nearest_resistance and abs(current_price - nearest_resistance) < 0.0005:  # Within 5 pips
+                        return True, f"SELL position price has returned to resistance level: {nearest_resistance:.5f}"
     
     return False, ""
 
@@ -451,6 +518,9 @@ def check_pending_orders(forex_pair):
                 comment="Contingency SELL LIMIT"
             )
             
+        # Set initial trade's contingency record to step 2
+        TRADING_SETTINGS[contingency_key]["step"] = 2
+        
     except Exception as e:
         logger.error(f"Error checking pending orders for {forex_pair}: {e}")
         logger.error(traceback.format_exc())
@@ -784,17 +854,16 @@ def calculate_lot_size(forex_pair, stop_loss_distance_points):
         logger.error(traceback.format_exc())
         return 0.01  # Default to minimum lot size
 
-def open_buy_trade(forex_pair, lot_size, stop_loss_price):
+def open_buy_trade_without_sl(forex_pair, lot_size):
     """
-    Open a BUY trade
+    Open a BUY trade without a stop loss
     
     Args:
         forex_pair: Currency pair symbol
         lot_size: Lot size for the trade
-        stop_loss_price: Stop loss price level
         
     Returns:
-        True if trade was successfully opened, False otherwise
+        Order result if trade was successfully opened, False otherwise
     """
     try:
         import MetaTrader5 as mt5
@@ -829,7 +898,6 @@ def open_buy_trade(forex_pair, lot_size, stop_loss_price):
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_BUY,
             "price": symbol_tick.ask,  # Buy at ask price
-            "sl": stop_loss_price,  # Set stop loss
             "deviation": 10,  # Allow price deviation in points
             "magic": 234000,  # Magic number to identify trades
             "comment": "Mario Trader",
@@ -844,24 +912,23 @@ def open_buy_trade(forex_pair, lot_size, stop_loss_price):
             return False
         
         logger.info(f"Successfully opened BUY trade for {forex_pair}, ticket: {result.order}")
-        return True
+        return result
         
     except Exception as e:
         logger.error(f"Error opening BUY trade for {forex_pair}: {e}")
         logger.error(traceback.format_exc())
         return False
 
-def open_sell_trade(forex_pair, lot_size, stop_loss_price):
+def open_sell_trade_without_sl(forex_pair, lot_size):
     """
-    Open a SELL trade
+    Open a SELL trade without a stop loss
     
     Args:
         forex_pair: Currency pair symbol
         lot_size: Lot size for the trade
-        stop_loss_price: Stop loss price level
         
     Returns:
-        True if trade was successfully opened, False otherwise
+        Order result if trade was successfully opened, False otherwise
     """
     try:
         import MetaTrader5 as mt5
@@ -896,7 +963,6 @@ def open_sell_trade(forex_pair, lot_size, stop_loss_price):
             "volume": lot_size,
             "type": mt5.ORDER_TYPE_SELL,
             "price": symbol_tick.bid,  # Sell at bid price
-            "sl": stop_loss_price,  # Set stop loss
             "deviation": 10,  # Allow price deviation in points
             "magic": 234000,  # Magic number to identify trades
             "comment": "Mario Trader",
@@ -911,7 +977,7 @@ def open_sell_trade(forex_pair, lot_size, stop_loss_price):
             return False
         
         logger.info(f"Successfully opened SELL trade for {forex_pair}, ticket: {result.order}")
-        return True
+        return result
         
     except Exception as e:
         logger.error(f"Error opening SELL trade for {forex_pair}: {e}")
