@@ -65,6 +65,27 @@ def execute(forex_pair):
         force_buy = TRADING_SETTINGS.get("force_buy", False)
         force_sell = TRADING_SETTINGS.get("force_sell", False)
         
+        # Check account balance before trading
+        try:
+            account_info = mt5.account_info()
+            if account_info is None:
+                logger.error(f"Failed to get account info: {mt5.last_error()}")
+            else:
+                # Check if account balance has dropped by 20%
+                initial_balance = TRADING_SETTINGS.get("initial_balance", account_info.balance)
+                if "initial_balance" not in TRADING_SETTINGS:
+                    TRADING_SETTINGS["initial_balance"] = account_info.balance
+                    logger.info(f"Set initial account balance: {initial_balance}")
+                
+                current_balance = account_info.balance
+                balance_drop_percent = (initial_balance - current_balance) / initial_balance * 100
+                
+                if balance_drop_percent >= 20:
+                    logger.warning(f"Account balance has dropped by {balance_drop_percent:.2f}%, not generating new signals")
+                    return False
+        except Exception as e:
+            logger.error(f"Error checking account balance: {e}")
+        
         if force_buy:
             logger.info(f"FORCING BUY SIGNAL for {forex_pair} (testing mode)")
             current_market_price = latest['close']
@@ -116,23 +137,39 @@ def execute(forex_pair):
         
         # Execute trade
         if signal == 1:  # BUY
-            # Don't set a stop loss initially, but set a sell stop at 21 SMA
+            # Open the initial BUY trade without stop loss
             trade_result = open_buy_trade_without_sl(forex_pair, lot_size)
             if trade_result:
                 # Get ticket number of the opened trade
                 ticket = trade_result.order
                 
+                # Calculate take profit at 2× the distance from entry to 21 SMA
+                take_profit_distance = stop_loss_distance_points * 2
+                take_profit_price = current_market_price + take_profit_distance
+                
+                # Set take profit for the main position
+                modify_position_sl_tp(forex_pair, ticket, take_profit=take_profit_price)
+                
                 # Set sell stop at 21 SMA with 2x initial lot size
                 contingency_lot_size = lot_size * 2
                 logger.info(f"Setting SELL STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
                 
-                # Set pending order
+                # Calculate stop loss and take profit for the SELL STOP order
+                # For SELL STOP triggered when price falls to 21 SMA:
+                # - Stop loss is 3× the distance from 21 SMA to entry, above 21 SMA (in the losing direction)
+                # - Take profit is 2× the distance from 21 SMA to entry, below 21 SMA (in the profit direction)
+                stop_loss_price_for_sell_stop = sma_21 + (stop_loss_distance_points * 3)
+                take_profit_price_for_sell_stop = sma_21 - (stop_loss_distance_points * 2)
+                
+                # Set pending order with stop loss and take profit
                 set_pending_order(
                     forex_pair, 
                     "SELL_STOP", 
                     sma_21, 
                     contingency_lot_size,
-                    comment="Initial SELL STOP"
+                    comment="Initial SELL STOP",
+                    stop_loss=stop_loss_price_for_sell_stop,
+                    take_profit=take_profit_price_for_sell_stop
                 )
                 
                 # Store info for step 2 in settings
@@ -140,30 +177,54 @@ def execute(forex_pair):
                     "type": "BUY",
                     "initial_entry": current_market_price,
                     "initial_lot_size": lot_size,
-                    "step": 1
+                    "step": 1,
+                    "sma_21": sma_21,
+                    "take_profit": take_profit_price,
+                    "entry_to_sma_distance": stop_loss_distance_points
                 }
                 
+                # Log additional information
                 logger.info(f"BUY trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
+                logger.info(f"Contingency SELL STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
+                logger.info(f"SELL STOP SL: {stop_loss_price_for_sell_stop:.5f}, TP: {take_profit_price_for_sell_stop:.5f}")
+                
                 log_trade(forex_pair, "BUY", current_market_price, lot_size, None)
                 return True
         elif signal == -1:  # SELL
-            # Don't set a stop loss initially, but set a buy stop at 21 SMA
+            # Open the initial SELL trade without stop loss
             trade_result = open_sell_trade_without_sl(forex_pair, lot_size)
             if trade_result:
                 # Get ticket number of the opened trade
                 ticket = trade_result.order
                 
+                # Calculate take profit at 2× the distance from entry to 21 SMA
+                take_profit_distance = stop_loss_distance_points * 2
+                take_profit_price = current_market_price - take_profit_distance
+                
+                # Set take profit for the main position
+                modify_position_sl_tp(forex_pair, ticket, take_profit=take_profit_price)
+                
                 # Set buy stop at 21 SMA with 2x initial lot size
                 contingency_lot_size = lot_size * 2
                 logger.info(f"Setting BUY STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
                 
-                # Set pending order
+                # Calculate stop loss and take profit for the BUY STOP order
+                # For BUY STOP triggered when price rises to 21 SMA:
+                # - Stop loss is 3× the distance from 21 SMA to entry, below 21 SMA (in the losing direction)
+                # - Take profit is 2× the distance from 21 SMA to entry, above 21 SMA (in the profit direction)
+                stop_loss_price_for_buy_stop = sma_21 - (stop_loss_distance_points * 3)
+                take_profit_price_for_buy_stop = sma_21 + (stop_loss_distance_points * 2)
+                
+                # Set pending order with stop loss and take profit
                 set_pending_order(
                     forex_pair, 
                     "BUY_STOP", 
                     sma_21, 
                     contingency_lot_size,
-                    comment="Initial BUY STOP"
+                    comment="Initial BUY STOP",
+                    stop_loss=stop_loss_price_for_buy_stop,
+                    take_profit=take_profit_price_for_buy_stop
                 )
                 
                 # Store info for step 2 in settings
@@ -171,10 +232,18 @@ def execute(forex_pair):
                     "type": "SELL",
                     "initial_entry": current_market_price,
                     "initial_lot_size": lot_size,
-                    "step": 1
+                    "step": 1,
+                    "sma_21": sma_21,
+                    "take_profit": take_profit_price,
+                    "entry_to_sma_distance": stop_loss_distance_points
                 }
                 
+                # Log additional information
                 logger.info(f"SELL trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
+                logger.info(f"Contingency BUY STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
+                logger.info(f"BUY STOP SL: {stop_loss_price_for_buy_stop:.5f}, TP: {take_profit_price_for_buy_stop:.5f}")
+                
                 log_trade(forex_pair, "SELL", current_market_price, lot_size, None)
                 return True
         
@@ -191,6 +260,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     Check if we should exit existing positions based on:
     1. RSI divergence when in profit
     2. Price reaching support/resistance levels when in profit
+    3. Profit target at 2× the distance from entry to 21 SMA
     
     Args:
         forex_pair: Currency pair symbol
@@ -226,16 +296,22 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
         
         entry_to_sma_distance_pips = abs(entry_price - sma_21) * pip_multiplier
         
-        # Check if in profit
-        is_in_profit = False
+        # Calculate current profit in pips
+        current_profit_pips = 0
         if position_type == "BUY":
             current_profit_pips = (current_price - entry_price) * pip_multiplier
-            is_in_profit = current_profit_pips > 0
         else:  # SELL position
             current_profit_pips = (entry_price - current_price) * pip_multiplier
-            is_in_profit = current_profit_pips > 0
         
-        # Only check exit conditions if in profit
+        # Check if in profit
+        is_in_profit = current_profit_pips > 0
+        
+        # Check for profit target (2× the distance from entry to 21 SMA)
+        profit_target_pips = entry_to_sma_distance_pips * 2
+        if current_profit_pips >= profit_target_pips:
+            return True, f"Profit target reached: {current_profit_pips:.1f} pips (target: {profit_target_pips:.1f} pips)"
+        
+        # Only check other exit conditions if in profit
         if is_in_profit:
             # Check for RSI divergence
             if check_rsi_divergence(dfs, position_type):
@@ -376,7 +452,7 @@ def apply_contingency_plan(forex_pair, closed_positions, latest_indicators):
         logger.error(f"Error applying contingency plan for {forex_pair}: {e}")
         logger.error(traceback.format_exc())
 
-def set_pending_order(forex_pair, order_type, price, lot_size, comment=""):
+def set_pending_order(forex_pair, order_type, price, lot_size, comment="", stop_loss=None, take_profit=None):
     """
     Set a pending order
     
@@ -386,6 +462,8 @@ def set_pending_order(forex_pair, order_type, price, lot_size, comment=""):
         price: Price level for the pending order
         lot_size: Lot size for the order
         comment: Comment for the order
+        stop_loss: Stop loss level (optional)
+        take_profit: Take profit level (optional)
         
     Returns:
         True if order was placed successfully, False otherwise
@@ -434,13 +512,28 @@ def set_pending_order(forex_pair, order_type, price, lot_size, comment=""):
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
         
+        # Add stop loss if provided
+        if stop_loss is not None:
+            request["sl"] = stop_loss
+            
+        # Add take profit if provided
+        if take_profit is not None:
+            request["tp"] = take_profit
+        
         # Send the order
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             logger.error(f"Failed to place {order_type} order for {forex_pair}: {result.comment}")
             return False
         
-        logger.info(f"Successfully placed {order_type} order for {forex_pair} at {price}, lot size: {lot_size}")
+        # Log the information about the placed order
+        order_info = f"{order_type} order for {forex_pair} at {price}, lot size: {lot_size}"
+        if stop_loss is not None:
+            order_info += f", SL: {stop_loss}"
+        if take_profit is not None:
+            order_info += f", TP: {take_profit}"
+            
+        logger.info(f"Successfully placed {order_info}")
         return True
         
     except Exception as e:
@@ -490,11 +583,41 @@ def check_pending_orders(forex_pair):
         
         initial_entry = contingency["initial_entry"]
         initial_lot_size = contingency["initial_lot_size"]
+        sma_21 = contingency["sma_21"]
         
-        # Step 2: Place limit order at initial entry with 3x initial lot size
+        # Get the entry to SMA distance from settings
+        entry_to_sma_distance = contingency.get("entry_to_sma_distance", abs(initial_entry - sma_21))
+        
+        # Get the matching position
+        position = matching_positions[0]
+        position_ticket = position.ticket
+        
+        # For the newly activated position from the stop order, calculate 3x stop loss 
+        # and 2x take profit based on distance from entry to 21 SMA
+        entry_to_sma_distance = abs(initial_entry - sma_21)
+        
+        # Calculate and set stop loss and take profit for the newly activated position
         if contingency["type"] == "BUY":
-            # For original BUY, we now have a SELL position, so place BUY LIMIT
+            # For original BUY, we now have a SELL position
+            # Set stop loss at 3x distance above entry in the losing direction (above)
+            stop_loss_price = position.price_open + (entry_to_sma_distance * 3)
+            # Set take profit at 2x distance below entry in the profitable direction (below)
+            take_profit_price = position.price_open - (entry_to_sma_distance * 2)
+            
+            # Modify the position to add SL/TP
+            modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
+            logger.info(f"Modified SELL position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
+            
+            # Step 2: Place BUY LIMIT at initial entry with 3x initial lot size
             contingency_lot_size = initial_lot_size * 3
+            
+            # Calculate stop loss and take profit for the BUY LIMIT order
+            # For BUY LIMIT triggered when price returns to initial entry:
+            # - Stop loss is at the 21 SMA (below entry)
+            # - Take profit is 2× the distance from entry to 21 SMA (above entry)
+            buy_limit_sl = sma_21
+            buy_limit_tp = initial_entry + (entry_to_sma_distance * 2)
+            
             logger.info(f"Setting BUY LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
             set_pending_order(
@@ -502,11 +625,31 @@ def check_pending_orders(forex_pair):
                 "BUY_LIMIT", 
                 initial_entry, 
                 contingency_lot_size,
-                comment="Contingency BUY LIMIT"
+                comment="Contingency BUY LIMIT",
+                stop_loss=buy_limit_sl,
+                take_profit=buy_limit_tp
             )
         else:  # SELL position
-            # For original SELL, we now have a BUY position, so place SELL LIMIT
+            # For original SELL, we now have a BUY position
+            # Set stop loss at 3x distance below entry in the losing direction (below)
+            stop_loss_price = position.price_open - (entry_to_sma_distance * 3)
+            # Set take profit at 2x distance above entry in the profitable direction (above)
+            take_profit_price = position.price_open + (entry_to_sma_distance * 2)
+            
+            # Modify the position to add SL/TP
+            modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
+            logger.info(f"Modified BUY position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
+            
+            # Step 2: Place SELL LIMIT at initial entry with 3x initial lot size
             contingency_lot_size = initial_lot_size * 3
+            
+            # Calculate stop loss and take profit for the SELL LIMIT order
+            # For SELL LIMIT triggered when price returns to initial entry:
+            # - Stop loss is at the 21 SMA (above entry)
+            # - Take profit is 2× the distance from entry to 21 SMA (below entry)
+            sell_limit_sl = sma_21
+            sell_limit_tp = initial_entry - (entry_to_sma_distance * 2)
+            
             logger.info(f"Setting SELL LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
             set_pending_order(
@@ -514,11 +657,17 @@ def check_pending_orders(forex_pair):
                 "SELL_LIMIT", 
                 initial_entry, 
                 contingency_lot_size,
-                comment="Contingency SELL LIMIT"
+                comment="Contingency SELL LIMIT",
+                stop_loss=sell_limit_sl,
+                take_profit=sell_limit_tp
             )
             
-        # Set initial trade's contingency record to step 2
-        TRADING_SETTINGS[contingency_key]["step"] = 2
+        # Update contingency info for the next stage
+        TRADING_SETTINGS[contingency_key].update({
+            "step": 2,
+            "total_trades": 2,  # Initial trade + stop order
+            "total_lot_size": initial_lot_size + (initial_lot_size * 2)  # Initial + contingency so far
+        })
         
     except Exception as e:
         logger.error(f"Error checking pending orders for {forex_pair}: {e}")
@@ -1017,4 +1166,63 @@ def log_trade(forex_pair, action, price, lot_size, stop_loss):
     
     except Exception as e:
         logger.error(f"Error logging trade: {e}")
-        logger.error(traceback.format_exc()) 
+        logger.error(traceback.format_exc())
+
+def modify_position_sl_tp(forex_pair, position_ticket, stop_loss=None, take_profit=None):
+    """
+    Modify an existing position to set stop loss and take profit
+    
+    Args:
+        forex_pair: Currency pair symbol
+        position_ticket: Ticket number of the position
+        stop_loss: Stop loss price level (None to leave unchanged)
+        take_profit: Take profit price level (None to leave unchanged)
+        
+    Returns:
+        True if modification was successful, False otherwise
+    """
+    try:
+        import MetaTrader5 as mt5
+        
+        if not mt5.initialize():
+            logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
+            return False
+        
+        # Get the position details
+        position = mt5.positions_get(ticket=position_ticket)
+        if position is None or len(position) == 0:
+            logger.error(f"Failed to get position {position_ticket} for {forex_pair}")
+            return False
+        
+        # Get current position details
+        position = position[0]
+        
+        # Prepare modification request
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": forex_pair,
+            "position": position_ticket,
+            "magic": position.magic
+        }
+        
+        # Set stop loss if provided
+        if stop_loss is not None:
+            request["sl"] = stop_loss
+        
+        # Set take profit if provided
+        if take_profit is not None:
+            request["tp"] = take_profit
+        
+        # Send the modification request
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"Failed to modify position {position_ticket} for {forex_pair}: {result.comment}")
+            return False
+        
+        logger.info(f"Successfully modified position {position_ticket} for {forex_pair}: SL={stop_loss}, TP={take_profit}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error modifying position for {forex_pair}: {e}")
+        logger.error(traceback.format_exc())
+        return False 
