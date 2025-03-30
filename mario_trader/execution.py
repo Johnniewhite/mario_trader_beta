@@ -487,7 +487,7 @@ def set_pending_order(forex_pair, order_type, price, lot_size, comment="", stop_
 
 def check_pending_orders(forex_pair):
     """
-    Check for pending orders and handle step 2 of contingency plan if needed
+    Check for pending orders and handle contingency plan if needed
     
     Args:
         forex_pair: Currency pair symbol
@@ -502,129 +502,82 @@ def check_pending_orders(forex_pair):
         
         contingency = TRADING_SETTINGS[contingency_key]
         
-        # Check if we're still in step 1 (waiting for stop order to be triggered)
-        if contingency["step"] != 1:
-            return
-        
-        # Get open positions to see if step 1 stop order was triggered
+        # Get open positions to see if any stop orders were triggered
         positions = get_open_positions(forex_pair)
         
-        # If no positions, step 1 order wasn't triggered yet or was already closed
+        # If no positions, no stop orders were triggered yet
         if not positions:
             return
         
-        # Check if the position matches our expected contingency position
-        # (in opposite direction of original position)
-        expected_position_type = 1 if contingency["type"] == "BUY" else 0  # 0=buy, 1=sell
-        matching_positions = [p for p in positions if p.type == expected_position_type]
+        # Get the latest position (most recently opened)
+        latest_position = positions[-1]
+        position_type = "BUY" if latest_position.type == 0 else "SELL"
+        position_ticket = latest_position.ticket
         
-        if not matching_positions:
-            return
+        # Calculate distances for stop loss and take profit
+        entry_to_sma_distance = contingency.get("entry_to_sma_distance", abs(contingency["initial_entry"] - contingency["sma_21"]))
         
-        # Step 1 order was triggered, move to step 2
-        contingency["step"] = 2
-        TRADING_SETTINGS[contingency_key] = contingency
-        
-        initial_entry = contingency["initial_entry"]
-        initial_lot_size = contingency["initial_lot_size"]
-        sma_21 = contingency["sma_21"]
-        
-        # Get the entry to SMA distance from settings
-        entry_to_sma_distance = contingency.get("entry_to_sma_distance", abs(initial_entry - sma_21))
-        
-        # Get the matching position
-        position = matching_positions[0]
-        position_ticket = position.ticket
-        
-        # For the newly activated position from the stop order, calculate 3x stop loss 
-        # and 2x take profit based on distance from entry to 21 SMA
-        entry_to_sma_distance = abs(initial_entry - sma_21)
-        
-        # Calculate and set stop loss and take profit for the newly activated position
-        if contingency["type"] == "BUY":
-            # For original BUY, we now have a SELL position
+        # For the newly activated position, calculate stop loss and take profit
+        if position_type == "SELL":  # This is a contingency SELL from a BUY
             # Set stop loss at 3x distance above entry in the losing direction (above)
-            stop_loss_price = position.price_open + (entry_to_sma_distance * 3)
+            stop_loss_price = latest_position.price_open + (entry_to_sma_distance * 3)
             # Set take profit at 2x distance below entry in the profitable direction (below)
-            take_profit_price = position.price_open - (entry_to_sma_distance * 2)
+            take_profit_price = latest_position.price_open - (entry_to_sma_distance * 2)
             
             # Modify the position to add SL/TP
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified SELL position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
-            # Find and modify the original BUY position to set its stop loss at the contingency's take profit
-            original_buy_positions = [p for p in positions if p.type == 0]  # 0=buy
-            if original_buy_positions:
-                original_buy = original_buy_positions[0]
-                modify_position_sl_tp(forex_pair, original_buy.ticket, stop_loss=take_profit_price)
-                logger.info(f"Modified original BUY position {original_buy.ticket}: SL={take_profit_price:.5f} (contingency TP)")
+            # Place BUY STOP at initial entry with 2x lot size
+            contingency_lot_size = contingency["initial_lot_size"] * 2
+            logger.info(f"Setting BUY STOP at initial entry ({contingency['initial_entry']:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
-            # Step 2: Place BUY LIMIT at initial entry with 3x initial lot size
-            contingency_lot_size = initial_lot_size * 3
-            
-            # Calculate stop loss and take profit for the BUY LIMIT order
-            # For BUY LIMIT triggered when price returns to initial entry:
-            # - Stop loss is at the 21 SMA (below entry)
-            # - Take profit is 2× the distance from entry to 21 SMA (above entry)
-            buy_limit_sl = sma_21
-            buy_limit_tp = initial_entry + (entry_to_sma_distance * 2)
-            
-            logger.info(f"Setting BUY LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            # Calculate stop loss and take profit for the BUY STOP order
+            buy_stop_sl = contingency["sma_21"]  # Stop loss at 21 SMA
+            buy_stop_tp = contingency["initial_entry"] + (entry_to_sma_distance * 2)
             
             set_pending_order(
                 forex_pair, 
-                "BUY_LIMIT", 
-                initial_entry, 
+                "BUY_STOP", 
+                contingency["initial_entry"], 
                 contingency_lot_size,
-                comment="Contingency BUY LIMIT",
-                stop_loss=buy_limit_sl,
-                take_profit=buy_limit_tp
+                comment="Contingency BUY STOP",
+                stop_loss=buy_stop_sl,
+                take_profit=buy_stop_tp
             )
-        else:  # SELL position
-            # For original SELL, we now have a BUY position
+            
+        else:  # This is a contingency BUY from a SELL
             # Set stop loss at 3x distance below entry in the losing direction (below)
-            stop_loss_price = position.price_open - (entry_to_sma_distance * 3)
+            stop_loss_price = latest_position.price_open - (entry_to_sma_distance * 3)
             # Set take profit at 2x distance above entry in the profitable direction (above)
-            take_profit_price = position.price_open + (entry_to_sma_distance * 2)
+            take_profit_price = latest_position.price_open + (entry_to_sma_distance * 2)
             
             # Modify the position to add SL/TP
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified BUY position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
-            # Find and modify the original SELL position to set its stop loss at the contingency's take profit
-            original_sell_positions = [p for p in positions if p.type == 1]  # 1=sell
-            if original_sell_positions:
-                original_sell = original_sell_positions[0]
-                modify_position_sl_tp(forex_pair, original_sell.ticket, stop_loss=take_profit_price)
-                logger.info(f"Modified original SELL position {original_sell.ticket}: SL={take_profit_price:.5f} (contingency TP)")
+            # Place SELL STOP at initial entry with 2x lot size
+            contingency_lot_size = contingency["initial_lot_size"] * 2
+            logger.info(f"Setting SELL STOP at initial entry ({contingency['initial_entry']:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
-            # Step 2: Place SELL LIMIT at initial entry with 3x initial lot size
-            contingency_lot_size = initial_lot_size * 3
-            
-            # Calculate stop loss and take profit for the SELL LIMIT order
-            # For SELL LIMIT triggered when price returns to initial entry:
-            # - Stop loss is at the 21 SMA (above entry)
-            # - Take profit is 2× the distance from entry to 21 SMA (below entry)
-            sell_limit_sl = sma_21
-            sell_limit_tp = initial_entry - (entry_to_sma_distance * 2)
-            
-            logger.info(f"Setting SELL LIMIT at initial entry ({initial_entry:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
+            # Calculate stop loss and take profit for the SELL STOP order
+            sell_stop_sl = contingency["sma_21"]  # Stop loss at 21 SMA
+            sell_stop_tp = contingency["initial_entry"] - (entry_to_sma_distance * 2)
             
             set_pending_order(
                 forex_pair, 
-                "SELL_LIMIT", 
-                initial_entry, 
+                "SELL_STOP", 
+                contingency["initial_entry"], 
                 contingency_lot_size,
-                comment="Contingency SELL LIMIT",
-                stop_loss=sell_limit_sl,
-                take_profit=sell_limit_tp
+                comment="Contingency SELL STOP",
+                stop_loss=sell_stop_sl,
+                take_profit=sell_stop_tp
             )
             
         # Update contingency info for the next stage
         TRADING_SETTINGS[contingency_key].update({
-            "step": 2,
-            "total_trades": 2,  # Initial trade + stop order
-            "total_lot_size": initial_lot_size + (initial_lot_size * 2)  # Initial + contingency so far
+            "total_trades": TRADING_SETTINGS[contingency_key].get("total_trades", 0) + 1,
+            "total_lot_size": TRADING_SETTINGS[contingency_key].get("total_lot_size", 0) + contingency_lot_size
         })
         
     except Exception as e:
