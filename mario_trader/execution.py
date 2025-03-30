@@ -69,14 +69,8 @@ def execute(forex_pair):
             
         # Execute trade
         if signal == 1:  # BUY
-            # Set initial BUY STOP order at current market price
-            trade_result = set_pending_order(
-                forex_pair,
-                "BUY_STOP",
-                current_market_price,
-                lot_size,
-                comment="Initial BUY STOP"
-            )
+            # Execute market BUY order at current price
+            trade_result = open_buy_trade_without_sl(forex_pair, lot_size)
             
             if trade_result:
                 # Calculate take profit at 2× the distance from entry to 21 SMA
@@ -103,7 +97,7 @@ def execute(forex_pair):
                     "SELL_STOP", 
                     sma_21, 
                     contingency_lot_size,
-                    comment="Initial SELL STOP",
+                    comment="Contingency SELL STOP",
                     stop_loss=stop_loss_price_for_sell_stop,
                     take_profit=take_profit_price_for_sell_stop
                 )
@@ -120,7 +114,7 @@ def execute(forex_pair):
                 }
                 
                 # Log additional information
-                logger.info(f"BUY STOP order placed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"BUY order executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
                 logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
                 logger.info(f"Contingency SELL STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
                 logger.info(f"SELL STOP SL: {stop_loss_price_for_sell_stop:.5f}, TP: {take_profit_price_for_sell_stop:.5f}")
@@ -129,14 +123,8 @@ def execute(forex_pair):
                 return True
                 
         elif signal == -1:  # SELL
-            # Set initial SELL STOP order at current market price
-            trade_result = set_pending_order(
-                forex_pair,
-                "SELL_STOP",
-                current_market_price,
-                lot_size,
-                comment="Initial SELL STOP"
-            )
+            # Execute market SELL order at current price
+            trade_result = open_sell_trade_without_sl(forex_pair, lot_size)
             
             if trade_result:
                 # Calculate take profit at 2× the distance from entry to 21 SMA
@@ -163,7 +151,7 @@ def execute(forex_pair):
                     "BUY_STOP", 
                     sma_21, 
                     contingency_lot_size,
-                    comment="Initial BUY STOP",
+                    comment="Contingency BUY STOP",
                     stop_loss=stop_loss_price_for_buy_stop,
                     take_profit=take_profit_price_for_buy_stop
                 )
@@ -180,7 +168,7 @@ def execute(forex_pair):
                 }
                 
                 # Log additional information
-                logger.info(f"SELL STOP order placed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"SELL order executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
                 logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
                 logger.info(f"Contingency BUY STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
                 logger.info(f"BUY STOP SL: {stop_loss_price_for_buy_stop:.5f}, TP: {take_profit_price_for_buy_stop:.5f}")
