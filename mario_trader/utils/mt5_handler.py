@@ -28,9 +28,13 @@ def initialize_mt5(login, password, server):
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            if not mt5.initialize(login=login, password=password, server=server):
+            logger.info(f"Attempting to initialize MT5 (attempt {attempt}/{max_retries})")
+            logger.info(f"Login: {login}, Server: {server}")
+            
+            # Try to initialize without login first to check terminal
+            if not mt5.initialize():
                 error = mt5.last_error()
-                log_error(f"Failed to initialize MT5 (attempt {attempt}/{max_retries}): {error}")
+                logger.error(f"Failed to initialize MT5 terminal: {error}")
                 
                 # Check if the error is related to MT5 not being found
                 if error[0] == -10003 and "MetaTrader 5 x64 not found" in error[1]:
@@ -38,6 +42,19 @@ def initialize_mt5(login, password, server):
                         logger.error("MetaTrader 5 x64 is not installed or not found in the default location.")
                         logger.error("Please install MetaTrader 5 from https://www.metatrader5.com/en/download")
                         logger.error("After installation, make sure to run MetaTrader 5 at least once before using this bot.")
+                    continue
+                
+                # For IPC timeout, try to restart MT5
+                if error[0] == -10005:  # IPC timeout
+                    logger.warning("IPC timeout detected. Trying to restart MT5...")
+                    shutdown_mt5()
+                    time.sleep(2)  # Wait before retrying
+                    continue
+            
+            # Now try to initialize with login credentials
+            if not mt5.initialize(login=login, password=password, server=server):
+                error = mt5.last_error()
+                logger.error(f"Failed to initialize MT5 with credentials (attempt {attempt}/{max_retries}): {error}")
                 
                 if attempt < max_retries:
                     time.sleep(2)  # Wait before retrying
@@ -49,7 +66,8 @@ def initialize_mt5(login, password, server):
             # Verify account connection
             account_info = mt5.account_info()
             if account_info is None:
-                log_error(f"Failed to get account info (attempt {attempt}/{max_retries})")
+                error = mt5.last_error()
+                logger.error(f"Failed to get account info (attempt {attempt}/{max_retries}): {error}")
                 if attempt < max_retries:
                     time.sleep(2)  # Wait before retrying
                     continue
@@ -60,7 +78,7 @@ def initialize_mt5(login, password, server):
             return True
             
         except Exception as e:
-            log_error(f"Error initializing MT5 (attempt {attempt}/{max_retries})", e)
+            logger.error(f"Error initializing MT5 (attempt {attempt}/{max_retries})", e)
             if attempt < max_retries:
                 time.sleep(2)  # Wait before retrying
                 continue
