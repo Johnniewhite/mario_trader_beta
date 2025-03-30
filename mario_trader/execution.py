@@ -176,7 +176,9 @@ def execute(forex_pair):
                 log_trade(forex_pair, "SELL", current_market_price, lot_size, None)
                 return True
         
-        logger.warning(f"Failed to execute {signal_type} trade for {forex_pair}")
+        # If we get here, the trade execution failed
+        trade_type = "BUY" if signal == 1 else "SELL"
+        logger.warning(f"Failed to execute {trade_type} trade for {forex_pair}")
         return False
         
     except Exception as e:
