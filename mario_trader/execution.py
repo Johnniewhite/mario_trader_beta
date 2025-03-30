@@ -69,18 +69,22 @@ def execute(forex_pair):
             
         # Execute trade
         if signal == 1:  # BUY
-            # Open the initial BUY trade without stop loss
-            trade_result = open_buy_trade_without_sl(forex_pair, lot_size)
+            # Set initial BUY STOP order at current market price
+            trade_result = set_pending_order(
+                forex_pair,
+                "BUY_STOP",
+                current_market_price,
+                lot_size,
+                comment="Initial BUY STOP"
+            )
+            
             if trade_result:
-                # Get ticket number of the opened trade
-                ticket = trade_result.order
-                
                 # Calculate take profit at 2× the distance from entry to 21 SMA
                 take_profit_distance = stop_loss_distance_points * 2
                 take_profit_price = current_market_price + take_profit_distance
                 
                 # Set take profit for the main position
-                modify_position_sl_tp(forex_pair, ticket, take_profit=take_profit_price)
+                modify_position_sl_tp(forex_pair, trade_result.order, take_profit=take_profit_price)
                 
                 # Set sell stop at 21 SMA with 2x initial lot size
                 contingency_lot_size = lot_size * 2
@@ -116,26 +120,31 @@ def execute(forex_pair):
                 }
                 
                 # Log additional information
-                logger.info(f"BUY trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"BUY STOP order placed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
                 logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
                 logger.info(f"Contingency SELL STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
                 logger.info(f"SELL STOP SL: {stop_loss_price_for_sell_stop:.5f}, TP: {take_profit_price_for_sell_stop:.5f}")
                 
                 log_trade(forex_pair, "BUY", current_market_price, lot_size, None)
                 return True
-        elif signal == -1:  # SELL
-            # Open the initial SELL trade without stop loss
-            trade_result = open_sell_trade_without_sl(forex_pair, lot_size)
-            if trade_result:
-                # Get ticket number of the opened trade
-                ticket = trade_result.order
                 
+        elif signal == -1:  # SELL
+            # Set initial SELL STOP order at current market price
+            trade_result = set_pending_order(
+                forex_pair,
+                "SELL_STOP",
+                current_market_price,
+                lot_size,
+                comment="Initial SELL STOP"
+            )
+            
+            if trade_result:
                 # Calculate take profit at 2× the distance from entry to 21 SMA
                 take_profit_distance = stop_loss_distance_points * 2
                 take_profit_price = current_market_price - take_profit_distance
                 
                 # Set take profit for the main position
-                modify_position_sl_tp(forex_pair, ticket, take_profit=take_profit_price)
+                modify_position_sl_tp(forex_pair, trade_result.order, take_profit=take_profit_price)
                 
                 # Set buy stop at 21 SMA with 2x initial lot size
                 contingency_lot_size = lot_size * 2
@@ -171,7 +180,7 @@ def execute(forex_pair):
                 }
                 
                 # Log additional information
-                logger.info(f"SELL trade executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
+                logger.info(f"SELL STOP order placed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
                 logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
                 logger.info(f"Contingency BUY STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
                 logger.info(f"BUY STOP SL: {stop_loss_price_for_buy_stop:.5f}, TP: {take_profit_price_for_buy_stop:.5f}")
@@ -696,20 +705,28 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
         return False
     
     logger.info(f"Starting trading for {len(pairs)} currency pairs")
+    logger.info(f"Trading interval: {interval} seconds")
     
     try:
         while True:
             for pair in pairs:
-                logger.info(f"Processing {pair}")
-                
-                # Check pending orders first (for contingency plan)
-                check_pending_orders(pair)
-                
-                # Execute trading strategy
-                execute(pair)
-                
-                # Sleep briefly to avoid rate limits
-                time.sleep(1)
+                try:
+                    logger.info(f"Processing {pair}")
+                    
+                    # Check pending orders first (for contingency plan)
+                    check_pending_orders(pair)
+                    
+                    # Execute trading strategy
+                    execute(pair)
+                    
+                    # Sleep briefly to avoid rate limits
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {pair}: {e}")
+                    logger.error(traceback.format_exc())
+                    # Continue with next pair instead of stopping the entire bot
+                    continue
             
             logger.info(f"Completed cycle for all pairs, sleeping for {interval} seconds")
             time.sleep(interval)

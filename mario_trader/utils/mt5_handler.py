@@ -232,7 +232,7 @@ def get_current_price(symbol, price_type='close'):
         return None
 
 
-def open_trade(symbol, volume, stop_loss, trade_type):
+def open_trade(symbol, volume, stop_loss, trade_type, price=None):
     """
     Open a trade
     
@@ -240,25 +240,39 @@ def open_trade(symbol, volume, stop_loss, trade_type):
         symbol: Symbol to trade
         volume: Trade volume
         stop_loss: Stop loss price
-        trade_type: Trade type ('buy' or 'sell')
+        trade_type: Trade type ('buy', 'sell', 'buy_stop', 'sell_stop')
+        price: Price for pending orders (required for buy_stop and sell_stop)
         
     Returns:
         Trade result
     """
     try:
-        # Get current price
+        # Get current price for market orders
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
             log_error(f"Failed to get tick for {symbol}")
             return None
             
+        # Determine order type and price
+        if trade_type in ['buy_stop', 'sell_stop']:
+            if price is None:
+                log_error(f"Price required for pending orders")
+                return None
+            action = mt5.TRADE_ACTION_PENDING
+            order_type = mt5.ORDER_TYPE_BUY_STOP if trade_type == 'buy_stop' else mt5.ORDER_TYPE_SELL_STOP
+            order_price = price
+        else:
+            action = mt5.TRADE_ACTION_DEAL
+            order_type = mt5.ORDER_TYPE_BUY if trade_type == 'buy' else mt5.ORDER_TYPE_SELL
+            order_price = tick.ask if trade_type == 'buy' else tick.bid
+            
         # Prepare trade request
         request = {
-            "action": mt5.TRADE_ACTION_DEAL,
+            "action": action,
             "symbol": symbol,
             "volume": float(volume),
-            "type": mt5.ORDER_TYPE_BUY if trade_type == 'buy' else mt5.ORDER_TYPE_SELL,
-            "price": tick.ask if trade_type == 'buy' else tick.bid,
+            "type": order_type,
+            "price": order_price,
             "sl": stop_loss,
             "deviation": ORDER_SETTINGS["deviation"],
             "magic": ORDER_SETTINGS["magic_number"],
@@ -280,6 +294,89 @@ def open_trade(symbol, volume, stop_loss, trade_type):
         
     except Exception as e:
         log_error(f"Error opening trade for {symbol}", e)
+        return None
+
+
+def open_buy_trade_without_sl(symbol, volume):
+    """
+    Open a BUY trade without stop loss
+    
+    Args:
+        symbol: Symbol to trade
+        volume: Trade volume
+        
+    Returns:
+        Trade result
+    """
+    return open_trade(symbol, volume, 0, 'buy')
+
+
+def open_sell_trade_without_sl(symbol, volume):
+    """
+    Open a SELL trade without stop loss
+    
+    Args:
+        symbol: Symbol to trade
+        volume: Trade volume
+        
+    Returns:
+        Trade result
+    """
+    return open_trade(symbol, volume, 0, 'sell')
+
+
+def set_pending_order(symbol, order_type, price, volume, stop_loss=None, take_profit=None, comment=None):
+    """
+    Set a pending order
+    
+    Args:
+        symbol: Symbol to trade
+        order_type: Order type ('BUY_STOP' or 'SELL_STOP')
+        price: Order price
+        volume: Order volume
+        stop_loss: Stop loss price (optional)
+        take_profit: Take profit price (optional)
+        comment: Order comment (optional)
+        
+    Returns:
+        Order result
+    """
+    try:
+        # Get current price for reference
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            log_error(f"Failed to get tick for {symbol}")
+            return None
+            
+        # Prepare order request
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": float(volume),
+            "type": mt5.ORDER_TYPE_BUY_STOP if order_type == 'BUY_STOP' else mt5.ORDER_TYPE_SELL_STOP,
+            "price": price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "deviation": ORDER_SETTINGS["deviation"],
+            "magic": ORDER_SETTINGS["magic_number"],
+            "comment": comment or ORDER_SETTINGS["comment"],
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Send the order request
+        result = mt5.order_send(request)
+        if result is None:
+            log_error(f"Failed to send pending order for {symbol}")
+            return None
+            
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            log_error(f"Pending order failed: {result.comment} (code: {result.retcode})")
+            
+        return result
+        
+    except Exception as e:
+        log_error(f"Error setting pending order for {symbol}", e)
         return None
 
 
