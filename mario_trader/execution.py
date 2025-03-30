@@ -550,6 +550,13 @@ def check_pending_orders(forex_pair):
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified SELL position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
+            # Find and modify the original BUY position to set its stop loss at the contingency's take profit
+            original_buy_positions = [p for p in positions if p.type == 0]  # 0=buy
+            if original_buy_positions:
+                original_buy = original_buy_positions[0]
+                modify_position_sl_tp(forex_pair, original_buy.ticket, stop_loss=take_profit_price)
+                logger.info(f"Modified original BUY position {original_buy.ticket}: SL={take_profit_price:.5f} (contingency TP)")
+            
             # Step 2: Place BUY LIMIT at initial entry with 3x initial lot size
             contingency_lot_size = initial_lot_size * 3
             
@@ -581,6 +588,13 @@ def check_pending_orders(forex_pair):
             # Modify the position to add SL/TP
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified BUY position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
+            
+            # Find and modify the original SELL position to set its stop loss at the contingency's take profit
+            original_sell_positions = [p for p in positions if p.type == 1]  # 1=sell
+            if original_sell_positions:
+                original_sell = original_sell_positions[0]
+                modify_position_sl_tp(forex_pair, original_sell.ticket, stop_loss=take_profit_price)
+                logger.info(f"Modified original SELL position {original_sell.ticket}: SL={take_profit_price:.5f} (contingency TP)")
             
             # Step 2: Place SELL LIMIT at initial entry with 3x initial lot size
             contingency_lot_size = initial_lot_size * 3
