@@ -42,6 +42,8 @@ def parse_arguments():
     parser.add_argument('--force-buy', action='store_true', help='Force buy signal')
     parser.add_argument('--force-sell', action='store_true', help='Force sell signal')
     parser.add_argument('--monitor', action='store_true', help='Monitor positions and pending orders continuously')
+    parser.add_argument('--test-lot-size', action='store_true', help='Test lot size calculation only')
+    parser.add_argument('--lot-size', type=float, help='Manually set lot size for testing')
     
     return parser.parse_args()
 
@@ -187,6 +189,25 @@ def main():
         TRADING_SETTINGS["force_buy"] = False
         TRADING_SETTINGS["force_sell"] = False
         
+    # Set custom lot size if provided
+    if args.lot_size is not None:
+        logger.info(f"Using manual lot size: {args.lot_size}")
+        
+        # Add a function to the execution module to manually set lot size
+        from mario_trader.execution import calculate_lot_size
+        original_calculate_lot_size = calculate_lot_size
+        
+        # Override the function with manual lot size
+        manual_lot_size = args.lot_size  # Store the value
+        def override_lot_size(*func_args, **kwargs):
+            logger.info(f"Overriding lot size calculation with manual value: {manual_lot_size}")
+            return manual_lot_size
+            
+        # Replace the function
+        from mario_trader.execution import execute as execute_func
+        import types
+        execute_func.__globals__['calculate_lot_size'] = override_lot_size
+        
     # Login to MT5
     if not login_trading(
         MT5_SETTINGS["login"],
@@ -197,6 +218,35 @@ def main():
         return 1
         
     try:
+        # Test lot size calculation if requested
+        if args.test_lot_size:
+            # Import the lot size calculation function
+            from mario_trader.execution import calculate_lot_size
+            
+            # Fetch data to get current price and indicators
+            dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
+            dfs = calculate_indicators(dfs)
+            latest = dfs.iloc[-1]
+            
+            # Get current price and 21 SMA
+            current_price = latest['close']
+            sma_21 = latest['21_SMA']
+            
+            # Calculate stop loss distance
+            stop_loss_distance = abs(current_price - sma_21)
+            
+            # Calculate lot size
+            lot_size = calculate_lot_size(forex_pair, stop_loss_distance)
+            
+            logger.info(f"Test lot size calculation:")
+            logger.info(f"  Currency pair: {forex_pair}")
+            logger.info(f"  Current price: {current_price:.5f}")
+            logger.info(f"  21 SMA: {sma_21:.5f}")
+            logger.info(f"  Stop loss distance: {stop_loss_distance:.5f}")
+            logger.info(f"  Calculated lot size: {lot_size:.2f}")
+            
+            return 0
+            
         # Execute strategy
         logger.info(f"Executing strategy for {forex_pair}")
         execute_result = execute(forex_pair)

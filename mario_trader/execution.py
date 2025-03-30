@@ -33,108 +33,41 @@ def execute(forex_pair):
         True if a trade was executed, False otherwise
     """
     try:
-        logger.info(f"Executing trading strategy for {forex_pair}")
-        dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
+        # Always enable contingency plan
+        TRADING_SETTINGS["contingency_plan"]["enabled"] = True
         
-        if dfs is None or dfs.empty:
-            logger.warning(f"No data available for {forex_pair}")
+        # Get current market data
+        dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
+        if dfs is None:
+            logger.error(f"Failed to fetch data for {forex_pair}")
             return False
             
-        # Add debug logging for market conditions
+        # Calculate indicators
+        dfs = calculate_indicators(dfs)
         latest = dfs.iloc[-1]
-        dfs = calculate_indicators(dfs)  # Calculate indicators for logging
-        latest_with_indicators = dfs.iloc[-1]
         
-        # Log key market conditions
-        logger.debug(f"{forex_pair} - Price: {latest['close']}, 200 SMA: {latest_with_indicators['200_SMA']:.2f}")
-        logger.debug(f"{forex_pair} - 21 SMA: {latest_with_indicators['21_SMA']:.2f}, 50 SMA: {latest_with_indicators['50_SMA']:.2f}")
-        logger.debug(f"{forex_pair} - RSI: {latest_with_indicators['RSI']:.2f}")
+        # Get current market price and indicators
+        current_market_price = latest['close']
+        sma_21 = latest['21_SMA']
+        sma_50 = latest['50_SMA']
+        sma_200 = latest['200_SMA']
+        rsi = latest['RSI']
         
-        # Detect support and resistance levels
-        support_resistance_levels = detect_support_resistance(dfs)
+        # Calculate distance from entry to 21 SMA for stop loss and take profit
+        stop_loss_distance_points = abs(current_market_price - sma_21)
         
-        # Check for consecutive candles
-        dfs['direction'] = np.sign(dfs['close'] - dfs['open'])
-        
-        # Get debug mode setting from configuration
-        debug_mode = TRADING_SETTINGS.get("debug_mode", False)
-        if debug_mode:
-            logger.info(f"Running in DEBUG MODE - strategy conditions may be relaxed for {forex_pair}")
-        
-        # Force specific signal if requested (for testing)
-        force_buy = TRADING_SETTINGS.get("force_buy", False)
-        force_sell = TRADING_SETTINGS.get("force_sell", False)
-        
-        # Check account balance before trading
-        try:
-            account_info = mt5.account_info()
-            if account_info is None:
-                logger.error(f"Failed to get account info: {mt5.last_error()}")
-            else:
-                # Check if account balance has dropped by 20%
-                initial_balance = TRADING_SETTINGS.get("initial_balance", account_info.balance)
-                if "initial_balance" not in TRADING_SETTINGS:
-                    TRADING_SETTINGS["initial_balance"] = account_info.balance
-                    logger.info(f"Set initial account balance: {initial_balance}")
-                
-                current_balance = account_info.balance
-                balance_drop_percent = (initial_balance - current_balance) / initial_balance * 100
-                
-                if balance_drop_percent >= 20:
-                    logger.warning(f"Account balance has dropped by {balance_drop_percent:.2f}%, not generating new signals")
-                    return False
-        except Exception as e:
-            logger.error(f"Error checking account balance: {e}")
-        
-        if force_buy:
-            logger.info(f"FORCING BUY SIGNAL for {forex_pair} (testing mode)")
-            current_market_price = latest['close']
-            stop_loss_distance = abs(latest_with_indicators['21_SMA'] - current_market_price)
-            stop_loss_value = current_market_price - stop_loss_distance
-            signal = 1
-        elif force_sell:
-            logger.info(f"FORCING SELL SIGNAL for {forex_pair} (testing mode)")
-            current_market_price = latest['close']
-            stop_loss_distance = abs(latest_with_indicators['21_SMA'] - current_market_price)
-            stop_loss_value = current_market_price + stop_loss_distance
-            signal = -1
-        else:
-            # Normal signal generation
-            signal, stop_loss_value, current_market_price = generate_signal(dfs, forex_pair, debug_mode)
-        
-        # Log the signal
-        signal_type = "BUY" if signal == 1 else "SELL" if signal == -1 else "NONE"
-        log_signal(forex_pair, signal_type, current_market_price, stop_loss_value)
-        
+        # Generate trading signal
+        signal = generate_signal(forex_pair)
         if signal == 0:
             logger.info(f"No trading signal for {forex_pair}")
             return False
             
         # Calculate lot size based on risk management
-        sma_21 = latest_with_indicators['21_SMA']
-        stop_loss_distance_points = abs(current_market_price - sma_21)
         lot_size = calculate_lot_size(forex_pair, stop_loss_distance_points)
-        
-        # Check for open positions
-        open_positions = get_open_positions(forex_pair)
-        
-        # Check if we need to manage existing positions
-        if open_positions:
-            logger.info(f"Found {len(open_positions)} open positions for {forex_pair}")
+        if lot_size <= 0:
+            logger.error(f"Invalid lot size calculated for {forex_pair}")
+            return False
             
-            # Check if we need to exit based on RSI divergence or support/resistance
-            should_exit, exit_reason = check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_levels)
-            if should_exit:
-                logger.info(f"Exiting positions for {forex_pair}: {exit_reason}")
-                close_all_positions(forex_pair)
-                return True
-            
-            # If we have open positions but no exit, don't enter new ones in same direction
-            if (signal == 1 and any(p.type == 0 for p in open_positions)) or \
-               (signal == -1 and any(p.type == 1 for p in open_positions)):
-                logger.info(f"Already have open positions in same direction for {forex_pair}, not entering new trade")
-                return False
-        
         # Execute trade
         if signal == 1:  # BUY
             # Open the initial BUY trade without stop loss
@@ -824,7 +757,12 @@ def start_trading(login=None, password=None, server=None, currency_pair=None):
     try:
         logger.info("Trading bot started")
         while True:
+            # Check pending orders and manage contingency plan
+            check_pending_orders(currency_pair)
+            
+            # Execute trading strategy
             execute(currency_pair)
+            
             # Sleep for a short period to avoid excessive CPU usage
             time.sleep(10)
     except KeyboardInterrupt:
@@ -939,6 +877,17 @@ def calculate_lot_size(forex_pair, stop_loss_distance_points):
         account_risk_amount = account_balance * risk_percentage
         logger.debug(f"Account balance: {account_balance}, Risk amount: {account_risk_amount}")
         
+        # Apply a minimum stop loss distance to prevent excessive lot sizes
+        # Typically 10 pips (0.0010) for most pairs, 100 pips (0.01) for JPY pairs
+        min_stop_loss_distance = 0.0010
+        if forex_pair.endswith('JPY'):
+            min_stop_loss_distance = 0.01
+        
+        # Apply the minimum stop loss distance if the current distance is too small
+        if stop_loss_distance_points < min_stop_loss_distance:
+            logger.warning(f"Stop loss distance ({stop_loss_distance_points:.5f}) is too small, using minimum ({min_stop_loss_distance:.5f})")
+            stop_loss_distance_points = min_stop_loss_distance
+        
         # Determine pip value based on currency pair
         one_pip_movement = 0.01 if forex_pair.endswith('JPY') else 0.0001
         
@@ -951,6 +900,11 @@ def calculate_lot_size(forex_pair, stop_loss_distance_points):
             pip_multiplier = 1.0  # 1 pip = 1 point (standard 4-digit broker)
         
         stop_loss_in_pips = stop_loss_distance_points / pip_multiplier
+        
+        # Ensure stop_loss_in_pips is not zero to avoid division by zero
+        if stop_loss_in_pips <= 0:
+            logger.warning(f"Stop loss in pips is {stop_loss_in_pips}, using minimum 10 pips")
+            stop_loss_in_pips = 10.0
         
         # Calculate pip value (monetary value of 1 pip for 1 standard lot)
         # Formula: (one_pip / exchange_rate) * lot_size
@@ -985,9 +939,15 @@ def calculate_lot_size(forex_pair, stop_loss_distance_points):
         # Calculate lot size based on risk amount
         lot_size = account_risk_amount / (stop_loss_in_pips * pip_value_per_lot)
         
+        # Apply maximum lot size restriction (20% of account balance at max)
+        account_equity = account_info.equity
+        max_lot_size_by_balance = account_equity / (current_price * 100) * 0.2  # 20% of equity in standard lots
+        
+        # Also respect broker's max lot size
+        max_lot_size = min(symbol_info.volume_max, max_lot_size_by_balance)
+        
         # Ensure lot size is within allowed range
         min_lot_size = symbol_info.volume_min
-        max_lot_size = symbol_info.volume_max
         lot_size = max(min(lot_size, max_lot_size), min_lot_size)
         
         # Round to nearest allowed lot step

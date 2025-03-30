@@ -65,6 +65,9 @@ TRADING_SETTINGS = {
         "stop_multiplier": 2.0,  # Lot size multiplier for stop orders (2x initial lot size)
         "limit_multiplier": 3.0,  # Lot size multiplier for limit orders (3x initial lot size)
         "cascade_multiplier": 1.0,  # Additional multiplier for each cascade level
+        "stop_loss_multiplier": 3.0,  # Stop loss multiplier (3x the distance to 21 SMA)
+        "take_profit_multiplier": 2.0,  # Take profit multiplier (2x the distance to 21 SMA)
+        "max_cascade_levels": 5  # Maximum number of cascade levels
     }
 }
 

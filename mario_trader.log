@@ -1,3 +1,16 @@
 2025-03-19 18:57:58 - mario_trader - INFO - Starting Mario Trader Bot
 2025-03-19 18:57:58 - mario_trader - INFO - Starting in multi-pair mode
 2025-03-19 18:57:58 - mario_trader - INFO - Logging in to MT5 server: Exness-MT5Trial10
+2025-03-22 15:17:59 - mario_trader - INFO - Debug mode enabled for EURUSD
+2025-03-22 15:17:59 - mario_trader - INFO - Logging in to MT5 server: Exness-MT5Trial10
+2025-03-22 15:19:05 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 1/3): (-10005, 'IPC timeout')
+2025-03-22 15:20:10 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 2/3): (-10005, 'IPC timeout')
+2025-03-22 15:21:15 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 3/3): (-10005, 'IPC timeout')
+2025-03-22 15:21:15 - mario_trader - ERROR - Failed to login to MT5
+2025-03-30 15:01:49 - mario_trader - INFO - Debug mode enabled for EURUSD
+2025-03-30 15:01:49 - mario_trader - INFO - Forcing BUY signal for EURUSD
+2025-03-30 15:01:49 - mario_trader - INFO - Logging in to MT5 server: Exness-MT5Trial10
+2025-03-30 15:02:55 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 1/3): (-10005, 'IPC timeout')
+2025-03-30 15:04:02 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 2/3): (-10005, 'IPC timeout')
+2025-03-30 15:05:09 - mario_trader - ERROR - ERROR: Failed to initialize MT5 (attempt 3/3): (-10005, 'IPC timeout')
+2025-03-30 15:05:09 - mario_trader - ERROR - Failed to login to MT5
