@@ -189,7 +189,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     Check if we should exit existing positions based on:
     1. RSI divergence when in profit
     2. Price reaching support/resistance levels when in profit
-    3. Profit target at 2× the distance from entry to 21 SMA
+    3. Trailing stop loss at support/resistance levels
     
     Args:
         forex_pair: Currency pair symbol
@@ -211,53 +211,66 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     for position in open_positions:
         position_type = "BUY" if position.type == 0 else "SELL"
         entry_price = position.price_open
-        
-        # Calculate 21 SMA distance from entry in pips
-        sma_21 = latest['21_SMA']
-        
-        # For 5-digit brokers, divide by 10 for standard pip calculation
-        pip_multiplier = 10000.0
-        if forex_pair.endswith('JPY'):
-            pip_multiplier = 100.0
-        else:
-            # Most forex pairs have 4 or 5 decimal places
-            pip_multiplier = 10000.0
-        
-        entry_to_sma_distance_pips = abs(entry_price - sma_21) * pip_multiplier
+        position_ticket = position.ticket
         
         # Calculate current profit in pips
-        current_profit_pips = 0
-        if position_type == "BUY":
-            current_profit_pips = (current_price - entry_price) * pip_multiplier
-        else:  # SELL position
-            current_profit_pips = (entry_price - current_price) * pip_multiplier
+        pip_multiplier = 10000.0 if not forex_pair.endswith('JPY') else 100.0
+        current_profit_pips = (current_price - entry_price) * pip_multiplier if position_type == "BUY" else (entry_price - current_price) * pip_multiplier
         
         # Check if in profit
         is_in_profit = current_profit_pips > 0
         
-        # Check for profit target (2× the distance from entry to 21 SMA)
-        profit_target_pips = entry_to_sma_distance_pips * 2
-        if current_profit_pips >= profit_target_pips:
-            return True, f"Profit target reached: {current_profit_pips:.1f} pips (target: {profit_target_pips:.1f} pips)"
+        # Get current stop loss
+        current_sl = position.sl
         
-        # Only check other exit conditions if in profit
-        if is_in_profit:
-            # Check for RSI divergence
-            if check_rsi_divergence(dfs, position_type):
-                return True, f"RSI divergence detected while in profit for {position_type} position"
+        # For BUY positions
+        if position_type == "BUY":
+            # Find nearest support level below current price
+            if support_resistance_levels and len(support_resistance_levels['support']) > 0:
+                nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
+                if nearest_support and nearest_support < current_price:
+                    # If we have a new higher support level, update stop loss
+                    if current_sl == 0 or nearest_support > current_sl:
+                        logger.info(f"Updating trailing stop loss for BUY position {position_ticket} to support level: {nearest_support:.5f}")
+                        modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_support)
+                        continue
             
-            # Check if price has reached support/resistance level
-            if support_resistance_levels and len(support_resistance_levels['support']) > 0 and len(support_resistance_levels['resistance']) > 0:
-                if position_type == "BUY":
-                    # For BUY, check if price has returned to support
-                    nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
-                    if nearest_support and abs(current_price - nearest_support) < 0.0005:  # Within 5 pips
-                        return True, f"BUY position price has returned to support level: {nearest_support:.5f}"
-                else:  # SELL
-                    # For SELL, check if price has returned to resistance
-                    nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
-                    if nearest_resistance and abs(current_price - nearest_resistance) < 0.0005:  # Within 5 pips
-                        return True, f"SELL position price has returned to resistance level: {nearest_resistance:.5f}"
+            # Check for RSI divergence if in profit
+            if is_in_profit and check_rsi_divergence(dfs, position_type):
+                logger.info(f"RSI divergence detected for BUY position {position_ticket} while in profit")
+                return True, f"RSI divergence detected while in profit for BUY position"
+        
+        # For SELL positions
+        else:  # SELL
+            # Find nearest resistance level above current price
+            if support_resistance_levels and len(support_resistance_levels['resistance']) > 0:
+                nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
+                if nearest_resistance and nearest_resistance > current_price:
+                    # If we have a new lower resistance level, update stop loss
+                    if current_sl == 0 or nearest_resistance < current_sl:
+                        logger.info(f"Updating trailing stop loss for SELL position {position_ticket} to resistance level: {nearest_resistance:.5f}")
+                        modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_resistance)
+                        continue
+            
+            # Check for RSI divergence if in profit
+            if is_in_profit and check_rsi_divergence(dfs, position_type):
+                logger.info(f"RSI divergence detected for SELL position {position_ticket} while in profit")
+                return True, f"RSI divergence detected while in profit for SELL position"
+        
+        # Check if price has returned to the latest support/resistance level
+        if support_resistance_levels:
+            if position_type == "BUY":
+                # For BUY, check if price has returned to support
+                nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
+                if nearest_support and abs(current_price - nearest_support) < 0.0005:  # Within 5 pips
+                    logger.info(f"BUY position {position_ticket} price has returned to support level: {nearest_support:.5f}")
+                    return True, f"BUY position price has returned to support level: {nearest_support:.5f}"
+            else:  # SELL
+                # For SELL, check if price has returned to resistance
+                nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
+                if nearest_resistance and abs(current_price - nearest_resistance) < 0.0005:  # Within 5 pips
+                    logger.info(f"SELL position {position_ticket} price has returned to resistance level: {nearest_resistance:.5f}")
+                    return True, f"SELL position price has returned to resistance level: {nearest_resistance:.5f}"
     
     return False, ""
 
