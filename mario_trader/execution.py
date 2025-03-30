@@ -517,6 +517,10 @@ def check_pending_orders(forex_pair):
         # Calculate distances for stop loss and take profit
         entry_to_sma_distance = contingency.get("entry_to_sma_distance", abs(contingency["initial_entry"] - contingency["sma_21"]))
         
+        # Get current number of trades and calculate lot size
+        current_trades = TRADING_SETTINGS[contingency_key].get("total_trades", 0)
+        contingency_lot_size = contingency["initial_lot_size"] * (current_trades + 1)
+        
         # For the newly activated position, calculate stop loss and take profit
         if position_type == "SELL":  # This is a contingency SELL from a BUY
             # Set stop loss at 3x distance above entry in the losing direction (above)
@@ -528,8 +532,7 @@ def check_pending_orders(forex_pair):
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified SELL position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
-            # Place BUY STOP at initial entry with 2x lot size
-            contingency_lot_size = contingency["initial_lot_size"] * 2
+            # Place BUY STOP at initial entry with calculated lot size
             logger.info(f"Setting BUY STOP at initial entry ({contingency['initial_entry']:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
             # Calculate stop loss and take profit for the BUY STOP order
@@ -556,8 +559,7 @@ def check_pending_orders(forex_pair):
             modify_position_sl_tp(forex_pair, position_ticket, stop_loss_price, take_profit_price)
             logger.info(f"Modified BUY position {position_ticket}: SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
-            # Place SELL STOP at initial entry with 2x lot size
-            contingency_lot_size = contingency["initial_lot_size"] * 2
+            # Place SELL STOP at initial entry with calculated lot size
             logger.info(f"Setting SELL STOP at initial entry ({contingency['initial_entry']:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
             
             # Calculate stop loss and take profit for the SELL STOP order
@@ -576,7 +578,7 @@ def check_pending_orders(forex_pair):
             
         # Update contingency info for the next stage
         TRADING_SETTINGS[contingency_key].update({
-            "total_trades": TRADING_SETTINGS[contingency_key].get("total_trades", 0) + 1,
+            "total_trades": current_trades + 1,
             "total_lot_size": TRADING_SETTINGS[contingency_key].get("total_lot_size", 0) + contingency_lot_size
         })
         
