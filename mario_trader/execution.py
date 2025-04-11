@@ -19,6 +19,7 @@ from mario_trader.indicators.technical import calculate_indicators, detect_suppo
 from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
+import threading
 
 
 def execute(forex_pair):
@@ -52,17 +53,82 @@ def execute(forex_pair):
         sma_200 = latest['200_SMA']
         rsi = latest['RSI']
         
-        # Calculate distance from entry to 21 SMA for stop loss and take profit
-        stop_loss_distance_points = abs(current_market_price - sma_21)
+        # Check if price is above 200 SMA
+        if current_market_price <= sma_200:
+            logger.info(f"Price is below 200 SMA for {forex_pair}, no trade")
+            return False
+            
+        # Check if 21 and 50 SMA are not too close (at least 10 pips apart)
+        sma_distance = abs(sma_21 - sma_50)
+        min_sma_distance = 0.0010 if not forex_pair.endswith('JPY') else 0.01
+        if sma_distance < min_sma_distance:
+            logger.info(f"21 and 50 SMA are too close for {forex_pair}, no trade")
+            return False
+            
+        # Check for three consecutive candles in opposite direction
+        # and engulfing candle in trade direction
+        signal = 0  # 0 = no signal, 1 = buy, -1 = sell
         
-        # Generate trading signal
-        signal, stop_loss, current_market_price = generate_signal(dfs, forex_pair, TRADING_SETTINGS["debug_mode"])
+        # Check for BUY signal
+        if rsi > 50:  # RSI above 50%
+            # Check last 4 candles
+            last_4_candles = dfs.iloc[-4:]
+            
+            # Check if last 3 candles were bearish (lower highs and lower lows)
+            bearish_candles = True
+            for i in range(1, 4):
+                if last_4_candles.iloc[-i]['high'] >= last_4_candles.iloc[-(i+1)]['high'] or \
+                   last_4_candles.iloc[-i]['low'] >= last_4_candles.iloc[-(i+1)]['low']:
+                    bearish_candles = False
+                    break
+                    
+            # Check if last candle touched 21 SMA
+            last_candle_touched_sma = last_4_candles.iloc[-1]['low'] <= sma_21
+            
+            # Check for bullish engulfing pattern
+            current_candle = last_4_candles.iloc[-1]
+            previous_candle = last_4_candles.iloc[-2]
+            bullish_engulfing = (current_candle['close'] > previous_candle['open'] and
+                               current_candle['open'] < previous_candle['close'] and
+                               current_candle['close'] - current_candle['open'] > 
+                               previous_candle['open'] - previous_candle['close'])
+            
+            if bearish_candles and last_candle_touched_sma and bullish_engulfing:
+                signal = 1
+                
+        # Check for SELL signal
+        elif rsi < 50:  # RSI below 50%
+            # Check last 4 candles
+            last_4_candles = dfs.iloc[-4:]
+            
+            # Check if last 3 candles were bullish (higher highs and higher lows)
+            bullish_candles = True
+            for i in range(1, 4):
+                if last_4_candles.iloc[-i]['high'] <= last_4_candles.iloc[-(i+1)]['high'] or \
+                   last_4_candles.iloc[-i]['low'] <= last_4_candles.iloc[-(i+1)]['low']:
+                    bullish_candles = False
+                    break
+                    
+            # Check if last candle touched 21 SMA
+            last_candle_touched_sma = last_4_candles.iloc[-1]['high'] >= sma_21
+            
+            # Check for bearish engulfing pattern
+            current_candle = last_4_candles.iloc[-1]
+            previous_candle = last_4_candles.iloc[-2]
+            bearish_engulfing = (current_candle['close'] < previous_candle['open'] and
+                               current_candle['open'] > previous_candle['close'] and
+                               current_candle['open'] - current_candle['close'] > 
+                               previous_candle['close'] - previous_candle['open'])
+            
+            if bullish_candles and last_candle_touched_sma and bearish_engulfing:
+                signal = -1
+                
         if signal == 0:
             logger.info(f"No trading signal for {forex_pair}")
             return False
             
         # Calculate lot size based on risk management
-        lot_size = calculate_lot_size(forex_pair, stop_loss_distance_points)
+        lot_size = calculate_lot_size(forex_pair, abs(current_market_price - sma_21))
         if lot_size <= 0:
             logger.error(f"Invalid lot size calculated for {forex_pair}")
             return False
@@ -74,24 +140,20 @@ def execute(forex_pair):
             
             if trade_result:
                 # Calculate take profit at 2× the distance from entry to 21 SMA
-                take_profit_distance = stop_loss_distance_points * 2
+                take_profit_distance = abs(current_market_price - sma_21) * 2
                 take_profit_price = current_market_price + take_profit_distance
                 
                 # Set take profit for the main position
                 modify_position_sl_tp(forex_pair, trade_result.order, take_profit=take_profit_price)
                 
-                # Set sell stop at 21 SMA with 2x initial lot size
+                # Set sell stop at 21 SMA with calculated lot size
                 contingency_lot_size = lot_size * 2
                 logger.info(f"Setting SELL STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
                 
                 # Calculate stop loss and take profit for the SELL STOP order
-                # For SELL STOP triggered when price falls to 21 SMA:
-                # - Stop loss is 3× the distance from 21 SMA to entry, above 21 SMA (in the losing direction)
-                # - Take profit is 2× the distance from 21 SMA to entry, below 21 SMA (in the profit direction)
-                stop_loss_price_for_sell_stop = sma_21 + (stop_loss_distance_points * 3)
-                take_profit_price_for_sell_stop = sma_21 - (stop_loss_distance_points * 2)
+                stop_loss_price_for_sell_stop = sma_21 + (abs(current_market_price - sma_21) * 3)
+                take_profit_price_for_sell_stop = sma_21 - (abs(current_market_price - sma_21) * 2)
                 
-                # Set pending order with stop loss and take profit
                 set_pending_order(
                     forex_pair, 
                     "SELL_STOP", 
@@ -102,22 +164,15 @@ def execute(forex_pair):
                     take_profit=take_profit_price_for_sell_stop
                 )
                 
-                # Store info for step 2 in settings
+                # Store info for contingency plan
                 TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
                     "type": "BUY",
                     "initial_entry": current_market_price,
                     "initial_lot_size": lot_size,
-                    "step": 1,
                     "sma_21": sma_21,
                     "take_profit": take_profit_price,
-                    "entry_to_sma_distance": stop_loss_distance_points
+                    "entry_to_sma_distance": abs(current_market_price - sma_21)
                 }
-                
-                # Log additional information
-                logger.info(f"BUY order executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
-                logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
-                logger.info(f"Contingency SELL STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
-                logger.info(f"SELL STOP SL: {stop_loss_price_for_sell_stop:.5f}, TP: {take_profit_price_for_sell_stop:.5f}")
                 
                 log_trade(forex_pair, "BUY", current_market_price, lot_size, None)
                 return True
@@ -128,24 +183,20 @@ def execute(forex_pair):
             
             if trade_result:
                 # Calculate take profit at 2× the distance from entry to 21 SMA
-                take_profit_distance = stop_loss_distance_points * 2
+                take_profit_distance = abs(current_market_price - sma_21) * 2
                 take_profit_price = current_market_price - take_profit_distance
                 
                 # Set take profit for the main position
                 modify_position_sl_tp(forex_pair, trade_result.order, take_profit=take_profit_price)
                 
-                # Set buy stop at 21 SMA with 2x initial lot size
+                # Set buy stop at 21 SMA with calculated lot size
                 contingency_lot_size = lot_size * 2
                 logger.info(f"Setting BUY STOP at 21 SMA ({sma_21:.5f}) with {contingency_lot_size:.2f} lots for {forex_pair}")
                 
                 # Calculate stop loss and take profit for the BUY STOP order
-                # For BUY STOP triggered when price rises to 21 SMA:
-                # - Stop loss is 3× the distance from 21 SMA to entry, below 21 SMA (in the losing direction)
-                # - Take profit is 2× the distance from 21 SMA to entry, above 21 SMA (in the profit direction)
-                stop_loss_price_for_buy_stop = sma_21 - (stop_loss_distance_points * 3)
-                take_profit_price_for_buy_stop = sma_21 + (stop_loss_distance_points * 2)
+                stop_loss_price_for_buy_stop = sma_21 - (abs(current_market_price - sma_21) * 3)
+                take_profit_price_for_buy_stop = sma_21 + (abs(current_market_price - sma_21) * 2)
                 
-                # Set pending order with stop loss and take profit
                 set_pending_order(
                     forex_pair, 
                     "BUY_STOP", 
@@ -156,22 +207,15 @@ def execute(forex_pair):
                     take_profit=take_profit_price_for_buy_stop
                 )
                 
-                # Store info for step 2 in settings
+                # Store info for contingency plan
                 TRADING_SETTINGS[f"{forex_pair}_contingency"] = {
                     "type": "SELL",
                     "initial_entry": current_market_price,
                     "initial_lot_size": lot_size,
-                    "step": 1,
                     "sma_21": sma_21,
                     "take_profit": take_profit_price,
-                    "entry_to_sma_distance": stop_loss_distance_points
+                    "entry_to_sma_distance": abs(current_market_price - sma_21)
                 }
-                
-                # Log additional information
-                logger.info(f"SELL order executed for {forex_pair} at {current_market_price}, Lot size: {lot_size}")
-                logger.info(f"Take profit set at: {take_profit_price:.5f} (2× distance to 21 SMA)")
-                logger.info(f"Contingency BUY STOP at 21 SMA: {sma_21:.5f} with lot size: {contingency_lot_size:.2f}")
-                logger.info(f"BUY STOP SL: {stop_loss_price_for_buy_stop:.5f}, TP: {take_profit_price_for_buy_stop:.5f}")
                 
                 log_trade(forex_pair, "SELL", current_market_price, lot_size, None)
                 return True
@@ -657,7 +701,7 @@ def close_all_positions(forex_pair):
 
 def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
     """
-    Execute trading strategy for multiple currency pairs
+    Execute trading strategy for multiple currency pairs concurrently
     
     Args:
         login: MT5 account login
@@ -676,32 +720,38 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
         logger.error("No currency pairs available")
         return False
     
-    logger.info(f"Starting trading for {len(pairs)} currency pairs")
+    logger.info(f"Starting concurrent trading for {len(pairs)} currency pairs")
     logger.info(f"Trading interval: {interval} seconds")
     
+    # Create a thread for each currency pair
+    threads = []
+    for pair in pairs:
+        thread = threading.Thread(
+            target=execute_pair_continuously,
+            args=(pair, interval),
+            daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+        logger.info(f"Started thread for {pair}")
+    
     try:
+        # Keep the main thread running
         while True:
-            for pair in pairs:
-                try:
-                    logger.info(f"Processing {pair}")
-                    
-                    # Check pending orders first (for contingency plan)
-                    check_pending_orders(pair)
-                    
-                    # Execute trading strategy
-                    execute(pair)
-                    
-                    # Sleep briefly to avoid rate limits
-                    time.sleep(1)
-                    
-                except Exception as e:
-                    logger.error(f"Error processing {pair}: {e}")
-                    logger.error(traceback.format_exc())
-                    # Continue with next pair instead of stopping the entire bot
-                    continue
-            
-            logger.info(f"Completed cycle for all pairs, sleeping for {interval} seconds")
-            time.sleep(interval)
+            time.sleep(1)
+            # Check if any threads have died and restart them
+            for i, thread in enumerate(threads):
+                if not thread.is_alive():
+                    pair = pairs[i]
+                    logger.warning(f"Thread for {pair} died, restarting...")
+                    new_thread = threading.Thread(
+                        target=execute_pair_continuously,
+                        args=(pair, interval),
+                        daemon=True
+                    )
+                    threads[i] = new_thread
+                    new_thread.start()
+                    logger.info(f"Restarted thread for {pair}")
             
     except KeyboardInterrupt:
         logger.info("Trading stopped by user")
@@ -710,6 +760,33 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
         logger.error(f"Error in multi-pair trading: {e}")
         logger.error(traceback.format_exc())
         return False
+
+def execute_pair_continuously(forex_pair, interval):
+    """
+    Continuously execute trading strategy for a single currency pair
+    
+    Args:
+        forex_pair: Currency pair symbol
+        interval: Interval between trades in seconds
+    """
+    while True:
+        try:
+            logger.info(f"Processing {forex_pair}")
+            
+            # Check pending orders first (for contingency plan)
+            check_pending_orders(forex_pair)
+            
+            # Execute trading strategy
+            execute(forex_pair)
+            
+            # Sleep for the specified interval
+            time.sleep(interval)
+            
+        except Exception as e:
+            logger.error(f"Error processing {forex_pair}: {e}")
+            logger.error(traceback.format_exc())
+            # Sleep briefly before retrying
+            time.sleep(5)
 
 def start_trading(login=None, password=None, server=None, currency_pair=None):
     """
