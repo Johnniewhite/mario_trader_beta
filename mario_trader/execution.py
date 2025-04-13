@@ -81,9 +81,6 @@ def execute(forex_pair):
                    last_4_candles.iloc[-i]['low'] >= last_4_candles.iloc[-(i+1)]['low']:
                     bearish_candles = False
                     break
-                    
-            # Check if last candle touched 21 SMA
-            last_candle_touched_sma = last_4_candles.iloc[-1]['low'] <= sma_21
             
             # Check for bullish engulfing pattern
             current_candle = last_4_candles.iloc[-1]
@@ -93,7 +90,7 @@ def execute(forex_pair):
                                current_candle['close'] - current_candle['open'] > 
                                previous_candle['open'] - previous_candle['close'])
             
-            if bearish_candles and last_candle_touched_sma and bullish_engulfing:
+            if bearish_candles and bullish_engulfing:
                 signal = 1
                 
         # Check for SELL signal
@@ -108,9 +105,6 @@ def execute(forex_pair):
                    last_4_candles.iloc[-i]['low'] <= last_4_candles.iloc[-(i+1)]['low']:
                     bullish_candles = False
                     break
-                    
-            # Check if last candle touched 21 SMA
-            last_candle_touched_sma = last_4_candles.iloc[-1]['high'] >= sma_21
             
             # Check for bearish engulfing pattern
             current_candle = last_4_candles.iloc[-1]
@@ -120,7 +114,7 @@ def execute(forex_pair):
                                current_candle['open'] - current_candle['close'] > 
                                previous_candle['close'] - previous_candle['open'])
             
-            if bullish_candles and last_candle_touched_sma and bearish_engulfing:
+            if bullish_candles and bearish_engulfing:
                 signal = -1
                 
         if signal == 0:
