@@ -300,8 +300,8 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
         
         # For BUY positions
         if position_type == "BUY":
-            # Log strategy check
-            logger.info(f"BUY strategy adherence - Price vs 200 SMA: {'Above ✓' if current_price > sma_200 else 'Below ✗'}, RSI: {rsi:.1f}")
+            # Log strategy check - using ASCII characters instead of Unicode
+            logger.info(f"BUY strategy adherence - Price vs 200 SMA: {'Above (OK)' if current_price > sma_200 else 'Below (X)'}, RSI: {rsi:.1f}")
             
             # Find nearest support level below current price
             if support_resistance_levels and len(support_resistance_levels['support']) > 0:
@@ -317,7 +317,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
             
             # Check for RSI divergence if in profit
             has_divergence = check_rsi_divergence(dfs, position_type)
-            logger.info(f"RSI divergence check: {'Detected ⚠️' if has_divergence else 'None'}")
+            logger.info(f"RSI divergence check: {'Detected (!)' if has_divergence else 'None'}")
             
             if is_in_profit and has_divergence:
                 logger.info(f"RSI divergence detected for BUY position {position_ticket} while in profit")
@@ -325,7 +325,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
         
         # For SELL positions
         else:  # SELL
-            # Log strategy check
+            # Log strategy check - using ASCII characters instead of Unicode
             logger.info(f"SELL strategy adherence - RSI: {rsi:.1f}")
             
             # Find nearest resistance level above current price
@@ -342,7 +342,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
             
             # Check for RSI divergence if in profit
             has_divergence = check_rsi_divergence(dfs, position_type)
-            logger.info(f"RSI divergence check: {'Detected ⚠️' if has_divergence else 'None'}")
+            logger.info(f"RSI divergence check: {'Detected (!)' if has_divergence else 'None'}")
             
             if is_in_profit and has_divergence:
                 logger.info(f"RSI divergence detected for SELL position {position_ticket} while in profit")
