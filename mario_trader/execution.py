@@ -802,17 +802,29 @@ def check_pending_orders(forex_pair):
         logger.error(f"Error checking pending orders for {forex_pair}: {e}")
         return False
 
-def execute_multiple_pairs(pairs_list):
+def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
     """
     Execute trading strategy for multiple pairs
     
     Args:
-        pairs_list: List of currency pairs to trade
-        
+        login: MT5 account login
+        password: MT5 account password
+        server: MT5 server name
+        interval: Interval between trades in seconds
+    
     Returns:
         None
     """
     try:
+        # Initialize MT5 if login credentials provided
+        if login is not None:
+            if not login_trading(login, password, server):
+                logger.error("Failed to login to MT5")
+                return False
+        
+        # Get pairs list
+        pairs_list = load_currency_pairs()
+        
         # Filter out unsupported/disabled symbols
         valid_pairs = []
         for pair in pairs_list:

@@ -5,3 +5,13 @@ __pycache__/
 *.pyd
 *.pyw
 *.pyz
+
+.logs/
+.logs/trades/
+.logs/logs/
+.logs/logs/logs/
+.logs/logs/logs/logs/
+.logs/logs/logs/logs/logs/
+.logs/logs/logs/logs/logs/logs/
+
+*.log
