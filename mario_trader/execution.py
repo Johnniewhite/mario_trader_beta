@@ -853,7 +853,7 @@ def check_pending_orders(forex_pair):
         logger.error(f"Error checking pending orders for {forex_pair}: {e}")
         return False
 
-def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
+def execute_multiple_pairs(login=None, password=None, server=None, interval=1):
     """
     Execute trading strategy for multiple pairs in a continuous loop
     
@@ -861,7 +861,7 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
         login: MT5 account login
         password: MT5 account password
         server: MT5 server name
-        interval: Interval between trading cycles in seconds
+        interval: Interval between trading cycles in seconds (set to 1 second for minimal delay)
     
     Returns:
         None
@@ -873,7 +873,7 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
                 logger.error("Failed to login to MT5")
                 return False
         
-        logger.info(f"Starting continuous trading with {interval} second interval")
+        logger.info(f"Starting continuous trading with minimal delay between cycles")
         
         while True:  # Continuous loop
             try:
@@ -892,7 +892,7 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
                     
                 if not valid_pairs:
                     logger.error("No valid pairs to trade!")
-                    time.sleep(interval)  # Sleep and try again
+                    time.sleep(1)  # Brief pause before retrying
                     continue
                     
                 for forex_pair in valid_pairs:
@@ -926,14 +926,13 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
                         logger.error(f"Error processing {forex_pair}: {e}")
                         logger.error(traceback.format_exc())
                 
-                # Sleep for specified interval before next cycle
-                logger.info(f"Completed trading cycle, sleeping for {interval} seconds")
-                time.sleep(interval)
+                # Very brief pause between cycles to prevent system overload
+                time.sleep(0.1)
                 
             except Exception as e:
                 logger.error(f"Error in trading cycle: {e}")
                 logger.error(traceback.format_exc())
-                time.sleep(10)  # Sleep a bit before retrying on error
+                time.sleep(1)  # Brief pause before retrying on error
                 
     except KeyboardInterrupt:
         logger.info("Trading bot stopped by user")
