@@ -843,11 +843,25 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
             try:
                 logger.info(f"Processing {forex_pair}")
                 
+                # Get open positions for this pair
+                positions = get_open_positions(forex_pair)
+                
+                # If we have open positions, check exit conditions
+                if positions:
+                    # Get market data
+                    dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
+                    if dfs is not None:
+                        # Calculate indicators
+                        dfs = calculate_indicators(dfs)
+                        
+                        # Get support/resistance levels
+                        sr_levels = detect_support_resistance(dfs)
+                        
+                        # Check exit conditions
+                        check_exit_conditions(forex_pair, dfs, positions, sr_levels)
+                
                 # Check for existing positions and manage them
                 check_pending_orders(forex_pair)
-                
-                # Check exit conditions for open positions
-                check_exit_conditions(forex_pair)
                 
                 # Execute trading strategy
                 execute(forex_pair)
