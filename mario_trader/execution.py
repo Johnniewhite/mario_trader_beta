@@ -246,25 +246,55 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     # Get current price and indicators
     latest = dfs.iloc[-1]
     current_price = latest['close']
+    rsi = latest['RSI']
+    sma_21 = latest['21_SMA']
+    sma_50 = latest['50_SMA']
+    sma_200 = latest['200_SMA']
+    
+    # Print detailed monitoring info
+    logger.info(f"Monitoring active position(s) for {forex_pair}. Price: {current_price:.5f}, RSI: {rsi:.2f}")
+    logger.info(f"Key levels - 21 SMA: {sma_21:.5f}, 50 SMA: {sma_50:.5f}, 200 SMA: {sma_200:.5f}")
+    
+    # If we have support/resistance levels, log them
+    if support_resistance_levels:
+        supports = support_resistance_levels.get('support', [])
+        resistances = support_resistance_levels.get('resistance', [])
+        
+        if supports:
+            nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
+            logger.info(f"Nearest support: {nearest_support:.5f}")
+            
+        if resistances:
+            nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
+            logger.info(f"Nearest resistance: {nearest_resistance:.5f}")
     
     # Check each position
     for position in open_positions:
         position_type = "BUY" if position.type == 0 else "SELL"
         entry_price = position.price_open
         position_ticket = position.ticket
+        current_sl = position.sl
+        current_tp = position.tp
         
         # Calculate current profit in pips
         pip_multiplier = 10000.0 if not forex_pair.endswith('JPY') else 100.0
         current_profit_pips = (current_price - entry_price) * pip_multiplier if position_type == "BUY" else (entry_price - current_price) * pip_multiplier
         
+        # Calculate current profit as a percentage
+        profit_percentage = (current_price / entry_price - 1) * 100 if position_type == "BUY" else (entry_price / current_price - 1) * 100
+        
         # Check if in profit
         is_in_profit = current_profit_pips > 0
         
-        # Get current stop loss
-        current_sl = position.sl
+        # Log position status
+        logger.info(f"Position {position_ticket} ({position_type}) - Entry: {entry_price:.5f}, SL: {current_sl:.5f if current_sl else 'None'}, TP: {current_tp:.5f if current_tp else 'None'}")
+        logger.info(f"Current P/L: {current_profit_pips:.1f} pips ({profit_percentage:.2f}%)")
         
         # For BUY positions
         if position_type == "BUY":
+            # Log strategy check
+            logger.info(f"BUY strategy adherence - Price vs 200 SMA: {'Above ✓' if current_price > sma_200 else 'Below ✗'}, RSI: {rsi:.1f}")
+            
             # Find nearest support level below current price
             if support_resistance_levels and len(support_resistance_levels['support']) > 0:
                 nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
@@ -274,14 +304,22 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
                         logger.info(f"Updating trailing stop loss for BUY position {position_ticket} to support level: {nearest_support:.5f}")
                         modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_support)
                         continue
+                    else:
+                        logger.info(f"Current stop loss at {current_sl:.5f} already higher than nearest support at {nearest_support:.5f}")
             
             # Check for RSI divergence if in profit
-            if is_in_profit and check_rsi_divergence(dfs, position_type):
+            has_divergence = check_rsi_divergence(dfs, position_type)
+            logger.info(f"RSI divergence check: {'Detected ⚠️' if has_divergence else 'None'}")
+            
+            if is_in_profit and has_divergence:
                 logger.info(f"RSI divergence detected for BUY position {position_ticket} while in profit")
                 return True, f"RSI divergence detected while in profit for BUY position"
         
         # For SELL positions
         else:  # SELL
+            # Log strategy check
+            logger.info(f"SELL strategy adherence - RSI: {rsi:.1f}")
+            
             # Find nearest resistance level above current price
             if support_resistance_levels and len(support_resistance_levels['resistance']) > 0:
                 nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
@@ -291,9 +329,14 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
                         logger.info(f"Updating trailing stop loss for SELL position {position_ticket} to resistance level: {nearest_resistance:.5f}")
                         modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_resistance)
                         continue
+                    else:
+                        logger.info(f"Current stop loss at {current_sl:.5f} already lower than nearest resistance at {nearest_resistance:.5f}")
             
             # Check for RSI divergence if in profit
-            if is_in_profit and check_rsi_divergence(dfs, position_type):
+            has_divergence = check_rsi_divergence(dfs, position_type)
+            logger.info(f"RSI divergence check: {'Detected ⚠️' if has_divergence else 'None'}")
+            
+            if is_in_profit and has_divergence:
                 logger.info(f"RSI divergence detected for SELL position {position_ticket} while in profit")
                 return True, f"RSI divergence detected while in profit for SELL position"
         
@@ -804,13 +847,13 @@ def check_pending_orders(forex_pair):
 
 def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
     """
-    Execute trading strategy for multiple pairs
+    Execute trading strategy for multiple pairs in a continuous loop
     
     Args:
         login: MT5 account login
         password: MT5 account password
         server: MT5 server name
-        interval: Interval between trades in seconds
+        interval: Interval between trading cycles in seconds
     
     Returns:
         None
@@ -822,54 +865,70 @@ def execute_multiple_pairs(login=None, password=None, server=None, interval=60):
                 logger.error("Failed to login to MT5")
                 return False
         
-        # Get pairs list
-        pairs_list = load_currency_pairs()
+        logger.info(f"Starting continuous trading with {interval} second interval")
         
-        # Filter out unsupported/disabled symbols
-        valid_pairs = []
-        for pair in pairs_list:
-            # Check if symbol is enabled in MT5
-            if not mt5.symbol_select(pair, True):
-                logger.error(f"ERROR: Failed to enable symbol {pair}")
-                continue
-                
-            valid_pairs.append(pair)
-            
-        if not valid_pairs:
-            logger.error("No valid pairs to trade!")
-            return
-            
-        for forex_pair in valid_pairs:
+        while True:  # Continuous loop
             try:
-                logger.info(f"Processing {forex_pair}")
+                # Get pairs list
+                pairs_list = load_currency_pairs()
                 
-                # Get open positions for this pair
-                positions = get_open_positions(forex_pair)
-                
-                # If we have open positions, check exit conditions
-                if positions:
-                    # Get market data
-                    dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
-                    if dfs is not None:
-                        # Calculate indicators
-                        dfs = calculate_indicators(dfs)
+                # Filter out unsupported/disabled symbols
+                valid_pairs = []
+                for pair in pairs_list:
+                    # Check if symbol is enabled in MT5
+                    if not mt5.symbol_select(pair, True):
+                        logger.error(f"ERROR: Failed to enable symbol {pair}")
+                        continue
                         
-                        # Get support/resistance levels
-                        sr_levels = detect_support_resistance(dfs)
+                    valid_pairs.append(pair)
+                    
+                if not valid_pairs:
+                    logger.error("No valid pairs to trade!")
+                    time.sleep(interval)  # Sleep and try again
+                    continue
+                    
+                for forex_pair in valid_pairs:
+                    try:
+                        logger.info(f"Processing {forex_pair}")
                         
-                        # Check exit conditions
-                        check_exit_conditions(forex_pair, dfs, positions, sr_levels)
+                        # Get open positions for this pair
+                        positions = get_open_positions(forex_pair)
+                        
+                        # If we have open positions, check exit conditions
+                        if positions:
+                            # Get market data
+                            dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
+                            if dfs is not None:
+                                # Calculate indicators
+                                dfs = calculate_indicators(dfs)
+                                
+                                # Get support/resistance levels
+                                sr_levels = detect_support_resistance(dfs)
+                                
+                                # Check exit conditions
+                                check_exit_conditions(forex_pair, dfs, positions, sr_levels)
+                        
+                        # Check for existing positions and manage them
+                        check_pending_orders(forex_pair)
+                        
+                        # Execute trading strategy
+                        execute(forex_pair)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing {forex_pair}: {e}")
+                        logger.error(traceback.format_exc())
                 
-                # Check for existing positions and manage them
-                check_pending_orders(forex_pair)
-                
-                # Execute trading strategy
-                execute(forex_pair)
+                # Sleep for specified interval before next cycle
+                logger.info(f"Completed trading cycle, sleeping for {interval} seconds")
+                time.sleep(interval)
                 
             except Exception as e:
-                logger.error(f"Error processing {forex_pair}: {e}")
+                logger.error(f"Error in trading cycle: {e}")
                 logger.error(traceback.format_exc())
+                time.sleep(10)  # Sleep a bit before retrying on error
                 
+    except KeyboardInterrupt:
+        logger.info("Trading bot stopped by user")
     except Exception as e:
         logger.error(f"Error executing multiple pairs: {e}")
         logger.error(traceback.format_exc())
