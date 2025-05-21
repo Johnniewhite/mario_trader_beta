@@ -8,7 +8,7 @@ import numpy as np
 import os
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from mario_trader.utils.mt5_handler import (
     fetch_data, get_balance, get_contract_size, open_trade, initialize_mt5, shutdown_mt5,
     get_current_price, close_trade
@@ -25,6 +25,9 @@ import threading
 # Initialize the Gemini Engine
 gemini_engine = GeminiEngine()
 
+# Dictionary to store last trade time for each currency pair
+last_trade_time = {}
+
 def execute(forex_pair):
     """
     Execute trading strategy for a currency pair
@@ -38,6 +41,14 @@ def execute(forex_pair):
     try:
         # Always enable contingency plan
         TRADING_SETTINGS["contingency_plan"]["enabled"] = True
+        
+        # Check trade cooldown (minimum 1 hour between trades for the same pair)
+        current_time = datetime.now()
+        if forex_pair in last_trade_time:
+            time_since_last_trade = current_time - last_trade_time[forex_pair]
+            if time_since_last_trade < timedelta(hours=1):
+                logger.info(f"Trade cooldown active for {forex_pair}. Time remaining: {timedelta(hours=1) - time_since_last_trade}")
+                return False
         
         # Get current market data
         dfs = fetch_data(forex_pair, count=TRADING_SETTINGS["candles_count"])
@@ -56,7 +67,7 @@ def execute(forex_pair):
         sma_200 = latest['200_SMA']
         rsi = latest['RSI']
         
-        # Check if price is above 200 SMA
+        # Check if price is above 200 SMA for both buy and sell signals
         if current_market_price <= sma_200:
             logger.info(f"Price is below 200 SMA for {forex_pair}, no trade")
             return False
@@ -70,7 +81,7 @@ def execute(forex_pair):
             
         # Check for three consecutive candles in opposite direction
         # and engulfing candle in trade direction
-        signal = 0  # 0 = no signal, 1 = buy, -1 = sell
+        signal = 0
         
         # Check for BUY signal
         if rsi > 50:  # RSI above 50%
@@ -123,6 +134,9 @@ def execute(forex_pair):
         if signal == 0:
             logger.info(f"No trading signal for {forex_pair}")
             return False
+            
+        # Update last trade time
+        last_trade_time[forex_pair] = current_time
         
         # Prepare indicator data for Gemini verification
         indicator_data = {
@@ -311,12 +325,12 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
         "21_SMA": sma_21,
         "RSI": rsi,
     }
-    
+            
     # Check for RSI divergence
     rsi_divergence = check_rsi_divergence(dfs, position_type)
     if rsi_divergence:
         return True, f"RSI divergence detected while in profit ({profit_pips:.1f} pips)"
-    
+        
     # Check if price has returned to support/resistance level
     if support_resistance_levels:
         # For BUY positions, check if price has returned to a support level
@@ -370,7 +384,7 @@ def check_rsi_divergence(dfs, position_type):
     """
     # Need at least 5 candles to detect divergence
     if len(dfs) < 5:
-            return False 
+        return False 
 
     # Check last 5 candles for divergence
     last_candles = dfs.iloc[-5:].copy()

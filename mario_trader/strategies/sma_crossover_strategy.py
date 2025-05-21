@@ -10,7 +10,7 @@ For a BUY signal:
 - RSI must be above 50
 
 For a SELL signal:
-- The closing price must be below the 200-day SMA
+- The closing price must be above the 200-day SMA (same as buy)
 - There must be sufficient separation between the 21-day and 50-day SMAs (except if price recently crossed the 200 SMA)
 - There must be 3 or more consecutive buy candles and a sell candle
 - RSI must be below 50
@@ -219,13 +219,13 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
         return 1, stop_loss, current_market_price
     
     # SELL SIGNAL CONDITIONS
-    # The closing price must be below the 200-day SMA
-    price_below_200sma = latest['close'] < latest['200_SMA']
+    # The closing price must be above the 200-day SMA (same as buy)
+    price_above_200sma = latest['close'] > latest['200_SMA']
     # RSI must be below 50
     rsi_below_50 = latest['RSI'] < 50
     
     # Log individual conditions for SELL signal
-    logger.debug(f"{currency_pair} - Price < 200 SMA: {price_below_200sma}")
+    logger.debug(f"{currency_pair} - Price > 200 SMA: {price_above_200sma}")
     logger.debug(f"{currency_pair} - Sufficient SMA separation: {sufficient_separation}")
     logger.debug(f"{currency_pair} - RSI < 50: {rsi_below_50}")
     
@@ -233,14 +233,14 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
     if debug_mode:
         # If price and RSI conditions are met but other conditions aren't,
         # still generate a sell signal for testing
-        if price_below_200sma and rsi_below_50:
+        if price_above_200sma and rsi_below_50:
             logger.info(f"DEBUG MODE: Forcing SELL signal for {currency_pair} for testing")
             stop_loss_distance = abs(latest['21_SMA'] - current_market_price)
             stop_loss = current_market_price + stop_loss_distance
             return -1, stop_loss, current_market_price
     
     # Check for SELL signal with all conditions
-    if price_below_200sma and sufficient_separation and sell_pattern and rsi_below_50:
+    if price_above_200sma and sufficient_separation and sell_pattern and rsi_below_50:
         # Calculate stop loss based on recent swing high or a percentage of price
         stop_loss_distance = abs(latest['21_SMA'] - current_market_price)
         stop_loss = current_market_price + stop_loss_distance
@@ -250,7 +250,7 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
         logger.info(f"Sell pattern found: {sell_pattern}")
         logger.info(f"Current candle is sell: {current_candle_is_sell}")
         logger.info(f"RSI < 50: {latest['RSI']:.2f}")
-        logger.info(f"Price < 200 SMA: {latest['close']:.5f} < {latest['200_SMA']:.5f}")
+        logger.info(f"Price > 200 SMA: {latest['close']:.5f} > {latest['200_SMA']:.5f}")
         
         return -1, stop_loss, current_market_price
     
@@ -261,10 +261,10 @@ def generate_sma_crossover_signal(df, currency_pair, debug_mode=False):
     if price_above_200sma and sufficient_separation and rsi_above_50 and not buy_pattern:
         logger.debug(f"{currency_pair} - Almost BUY signal but missing correct candle pattern")
     
-    if price_below_200sma and sufficient_separation and current_candle_is_sell and not rsi_below_50:
+    if price_above_200sma and sufficient_separation and current_candle_is_sell and not rsi_below_50:
         logger.debug(f"{currency_pair} - Almost SELL signal but RSI not < 50: {latest['RSI']:.2f}")
     
-    if price_below_200sma and sufficient_separation and rsi_below_50 and not sell_pattern:
+    if price_above_200sma and sufficient_separation and rsi_below_50 and not sell_pattern:
         logger.debug(f"{currency_pair} - Almost SELL signal but missing correct candle pattern")
     
     return 0, 0, current_market_price 
