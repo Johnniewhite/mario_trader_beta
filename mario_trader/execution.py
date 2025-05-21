@@ -16,11 +16,14 @@ from mario_trader.utils.mt5_handler import (
 from mario_trader.strategies.signal import generate_signal
 from mario_trader.strategies.monitor import monitor_trade
 from mario_trader.indicators.technical import calculate_indicators, detect_support_resistance, find_nearest_level
-from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS
+from mario_trader.config import MT5_SETTINGS, TRADING_SETTINGS, ORDER_SETTINGS, GEMINI_SETTINGS
 from mario_trader.utils.logger import logger, log_trade, log_signal, log_error
 from mario_trader.utils.currency_pairs import load_currency_pairs, validate_currency_pair, get_default_pair
+from mario_trader.utils.gemini_engine import GeminiEngine
 import threading
 
+# Initialize the Gemini Engine
+gemini_engine = GeminiEngine()
 
 def execute(forex_pair):
     """
@@ -120,6 +123,32 @@ def execute(forex_pair):
         if signal == 0:
             logger.info(f"No trading signal for {forex_pair}")
             return False
+        
+        # Prepare indicator data for Gemini verification
+        indicator_data = {
+            "200_SMA": sma_200,
+            "50_SMA": sma_50,
+            "21_SMA": sma_21,
+            "RSI": rsi,
+        }
+        
+        # Use Gemini AI to verify the trade setup
+        signal_type = "BUY" if signal == 1 else "SELL"
+        gemini_verified, gemini_reason, gemini_confidence = gemini_engine.verify_trade_setup(
+            forex_pair, 
+            signal_type, 
+            dfs, 
+            indicator_data
+        )
+        
+        # Check if Gemini verification is required and failed
+        if GEMINI_SETTINGS["verification"]["required"] and not gemini_verified:
+            logger.warning(f"Gemini rejected {signal_type} signal for {forex_pair}: {gemini_reason}")
+            return False
+        
+        # Continue with trade execution even if Gemini rejected (but log the warning)
+        if not gemini_verified:
+            logger.warning(f"Proceeding with {signal_type} trade for {forex_pair} despite Gemini rejection (not required): {gemini_reason}")
             
         # Calculate lot size based on risk management
         lot_size = calculate_lot_size(forex_pair, abs(current_market_price - sma_21))
@@ -165,7 +194,9 @@ def execute(forex_pair):
                     "initial_lot_size": lot_size,
                     "sma_21": sma_21,
                     "take_profit": take_profit_price,
-                    "entry_to_sma_distance": abs(current_market_price - sma_21)
+                    "entry_to_sma_distance": abs(current_market_price - sma_21),
+                    "gemini_approval": gemini_verified,
+                    "gemini_confidence": gemini_confidence
                 }
                 
                 log_trade(forex_pair, "BUY", current_market_price, lot_size, None)
@@ -208,7 +239,9 @@ def execute(forex_pair):
                     "initial_lot_size": lot_size,
                     "sma_21": sma_21,
                     "take_profit": take_profit_price,
-                    "entry_to_sma_distance": abs(current_market_price - sma_21)
+                    "entry_to_sma_distance": abs(current_market_price - sma_21),
+                    "gemini_approval": gemini_verified,
+                    "gemini_confidence": gemini_confidence
                 }
                 
                 log_trade(forex_pair, "SELL", current_market_price, lot_size, None)
@@ -230,6 +263,7 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     1. RSI divergence when in profit
     2. Price reaching support/resistance levels when in profit
     3. Trailing stop loss at support/resistance levels
+    4. Gemini AI recommendation
     
     Args:
         forex_pair: Currency pair symbol
@@ -248,121 +282,77 @@ def check_exit_conditions(forex_pair, dfs, open_positions, support_resistance_le
     current_price = latest['close']
     rsi = latest['RSI']
     sma_21 = latest['21_SMA']
-    sma_50 = latest['50_SMA']
-    sma_200 = latest['200_SMA']
     
-    # Print detailed monitoring info
-    logger.info(f"Monitoring active position(s) for {forex_pair}. Price: {current_price:.5f}, RSI: {rsi:.2f}")
-    logger.info(f"Key levels - 21 SMA: {sma_21:.5f}, 50 SMA: {sma_50:.5f}, 200 SMA: {sma_200:.5f}")
+    # Extract position details from the first open position
+    position = open_positions[0]
+    position_type = "BUY" if position.type == 0 else "SELL"  # 0 = BUY, 1 = SELL
+    entry_price = position.price_open
     
-    # If we have support/resistance levels, log them
+    # Calculate current profit
+    if position_type == "BUY":
+        is_profitable = current_price > entry_price
+        profit_pips = (current_price - entry_price) * 10000
+    else:  # SELL
+        is_profitable = current_price < entry_price
+        profit_pips = (entry_price - current_price) * 10000
+    
+    # Only check exit conditions if the position is profitable
+    if not is_profitable:
+        return False, "Position not in profit"
+    
+    # Calculate trade duration in minutes (roughly based on 5-min candles)
+    candle_count = len(dfs)
+    trade_duration_minutes = min(candle_count * 5, 1440)  # Cap at 24 hours for estimation
+    
+    # Prepare indicator data for Gemini
+    indicator_data = {
+        "200_SMA": latest.get('200_SMA', 0),
+        "50_SMA": latest.get('50_SMA', 0),
+        "21_SMA": sma_21,
+        "RSI": rsi,
+    }
+    
+    # Check for RSI divergence
+    rsi_divergence = check_rsi_divergence(dfs, position_type)
+    if rsi_divergence:
+        return True, f"RSI divergence detected while in profit ({profit_pips:.1f} pips)"
+    
+    # Check if price has returned to support/resistance level
     if support_resistance_levels:
-        supports = support_resistance_levels.get('support', [])
-        resistances = support_resistance_levels.get('resistance', [])
-        
-        if supports:
-            nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
-            if nearest_support is not None:
-                logger.info(f"Nearest support: {nearest_support:.5f}")
-            else:
-                logger.info("No suitable support level found")
-            
-        if resistances:
-            nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
-            if nearest_resistance is not None:
-                logger.info(f"Nearest resistance: {nearest_resistance:.5f}")
-            else:
-                logger.info("No suitable resistance level found")
-    
-    # Check each position
-    for position in open_positions:
-        position_type = "BUY" if position.type == 0 else "SELL"
-        entry_price = position.price_open
-        position_ticket = position.ticket
-        current_sl = position.sl
-        current_tp = position.tp
-        
-        # Calculate current profit in pips
-        pip_multiplier = 10000.0 if not forex_pair.endswith('JPY') else 100.0
-        current_profit_pips = (current_price - entry_price) * pip_multiplier if position_type == "BUY" else (entry_price - current_price) * pip_multiplier
-        
-        # Calculate current profit as a percentage
-        profit_percentage = (current_price / entry_price - 1) * 100 if position_type == "BUY" else (entry_price / current_price - 1) * 100
-        
-        # Check if in profit
-        is_in_profit = current_profit_pips > 0
-        
-        # Log position status
-        sl_text = f"{current_sl:.5f}" if current_sl else "None"
-        tp_text = f"{current_tp:.5f}" if current_tp else "None"
-        logger.info(f"Position {position_ticket} ({position_type}) - Entry: {entry_price:.5f}, SL: {sl_text}, TP: {tp_text}")
-        logger.info(f"Current P/L: {current_profit_pips:.1f} pips ({profit_percentage:.2f}%)")
-        
-        # For BUY positions
+        # For BUY positions, check if price has returned to a support level
         if position_type == "BUY":
-            # Log strategy check - using ASCII characters instead of Unicode
-            logger.info(f"BUY strategy adherence - Price vs 200 SMA: {'Above (OK)' if current_price > sma_200 else 'Below (X)'}, RSI: {rsi:.1f}")
-            
-            # Find nearest support level below current price
-            if support_resistance_levels and len(support_resistance_levels['support']) > 0:
-                nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
-                if nearest_support is not None and nearest_support < current_price:
-                    # If we have a new higher support level, update stop loss
-                    if current_sl == 0 or nearest_support > current_sl:
-                        logger.info(f"Updating trailing stop loss for BUY position {position_ticket} to support level: {nearest_support:.5f}")
-                        modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_support)
-                        continue
-                    elif current_sl:
-                        logger.info(f"Current stop loss at {current_sl:.5f} already higher than nearest support at {nearest_support:.5f}")
-            
-            # Check for RSI divergence if in profit
-            has_divergence = check_rsi_divergence(dfs, position_type)
-            logger.info(f"RSI divergence check: {'Detected (!)' if has_divergence else 'None'}")
-            
-            if is_in_profit and has_divergence:
-                logger.info(f"RSI divergence detected for BUY position {position_ticket} while in profit")
-                return True, f"RSI divergence detected while in profit for BUY position"
+            nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
+            if nearest_support and abs(current_price - nearest_support) < 0.0005:  # Within 5 pips
+                return True, f"Price returned to support level at {nearest_support:.5f} while in profit ({profit_pips:.1f} pips)"
         
-        # For SELL positions
-        else:  # SELL
-            # Log strategy check - using ASCII characters instead of Unicode
-            logger.info(f"SELL strategy adherence - RSI: {rsi:.1f}")
-            
-            # Find nearest resistance level above current price
-            if support_resistance_levels and len(support_resistance_levels['resistance']) > 0:
-                nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
-                if nearest_resistance is not None and nearest_resistance > current_price:
-                    # If we have a new lower resistance level, update stop loss
-                    if current_sl == 0 or nearest_resistance < current_sl:
-                        logger.info(f"Updating trailing stop loss for SELL position {position_ticket} to resistance level: {nearest_resistance:.5f}")
-                        modify_position_sl_tp(forex_pair, position_ticket, stop_loss=nearest_resistance)
-                        continue
-                    elif current_sl:
-                        logger.info(f"Current stop loss at {current_sl:.5f} already lower than nearest resistance at {nearest_resistance:.5f}")
-            
-            # Check for RSI divergence if in profit
-            has_divergence = check_rsi_divergence(dfs, position_type)
-            logger.info(f"RSI divergence check: {'Detected (!)' if has_divergence else 'None'}")
-            
-            if is_in_profit and has_divergence:
-                logger.info(f"RSI divergence detected for SELL position {position_ticket} while in profit")
-                return True, f"RSI divergence detected while in profit for SELL position"
-        
-        # Check if price has returned to the latest support/resistance level
-        if support_resistance_levels:
-            if position_type == "BUY":
-                # For BUY, check if price has returned to support
-                nearest_support = find_nearest_level(current_price, support_resistance_levels, "BUY")
-                if nearest_support is not None and abs(current_price - nearest_support) < 0.0005:  # Within 5 pips
-                    logger.info(f"BUY position {position_ticket} price has returned to support level: {nearest_support:.5f}")
-                    return True, f"BUY position price has returned to support level: {nearest_support:.5f}"
-            else:  # SELL
-                # For SELL, check if price has returned to resistance
-                nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
-                if nearest_resistance is not None and abs(current_price - nearest_resistance) < 0.0005:  # Within 5 pips
-                    logger.info(f"SELL position {position_ticket} price has returned to resistance level: {nearest_resistance:.5f}")
-                    return True, f"SELL position price has returned to resistance level: {nearest_resistance:.5f}"
+        # For SELL positions, check if price has returned to a resistance level
+        else:
+            nearest_resistance = find_nearest_level(current_price, support_resistance_levels, "SELL")
+            if nearest_resistance and abs(current_price - nearest_resistance) < 0.0005:  # Within 5 pips
+                return True, f"Price returned to resistance level at {nearest_resistance:.5f} while in profit ({profit_pips:.1f} pips)"
     
+    # Use Gemini AI to monitor the trade if enabled
+    if GEMINI_SETTINGS["monitoring"]["enabled"]:
+        # Only check every X minutes to avoid API overuse
+        if candle_count % GEMINI_SETTINGS["monitoring"]["interval"] == 0 or profit_pips > 20:
+            gemini_exit, gemini_reason, gemini_confidence = gemini_engine.monitor_trade(
+                forex_pair,
+                position_type,
+                entry_price,
+                current_price,
+                trade_duration_minutes,
+                dfs,
+                indicator_data
+            )
+            
+            # Check if Gemini recommends exit
+            if gemini_exit:
+                if GEMINI_SETTINGS["monitoring"]["required"] or gemini_confidence >= GEMINI_SETTINGS["min_confidence"]:
+                    return True, f"Gemini recommends exit: {gemini_reason} (Confidence: {gemini_confidence:.2f})"
+                else:
+                    logger.info(f"Gemini suggests exit but confidence too low: {gemini_reason} (Confidence: {gemini_confidence:.2f})")
+    
+    # No exit conditions met
     return False, ""
 
 def check_rsi_divergence(dfs, position_type):

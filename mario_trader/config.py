@@ -38,6 +38,23 @@ MT5_SETTINGS = {
     "server": "Exness-MT5Trial10",
 }
 
+# Gemini AI Integration Settings
+GEMINI_SETTINGS = {
+    "enabled": True,  # Set to True to enable Gemini verification
+    "api_key": os.environ.get("GEMINI_API_KEY", ""),  # Get API key from environment variable
+    "api_endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+    "min_confidence": 0.7,  # Minimum confidence score (0.0-1.0) to approve trades
+    "verification": {
+        "enabled": True,  # Enable pre-trade verification
+        "required": False  # If True, trades won't be placed without Gemini approval
+    },
+    "monitoring": {
+        "enabled": True,  # Enable trade monitoring
+        "interval": 15,  # Check interval in minutes
+        "required": False  # If True, trades won't be exited without Gemini recommendation
+    }
+}
+
 # Trading settings
 TRADING_SETTINGS = {
     "default_currency_pair": get_default_pair(),

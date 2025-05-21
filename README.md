@@ -19,6 +19,11 @@ A MetaTrader 5 trading bot using an SMA Crossover Strategy with RSI confirmation
   - 3x stop and 2x profit targets automatically calculated
   - Cascading trade entries with increasing lot sizes
 
+- **Gemini AI Integration**
+  - Pre-trade verification of potential setups using Google's Gemini API
+  - Ongoing trade monitoring with AI-assisted exit recommendations
+  - Market analysis and insights from AI trading expert
+
 - **Risk Management**
   - 2% risk per trade using proper lot sizing
   - Pip value calculation for accurate position sizing
@@ -56,7 +61,32 @@ The new contingency plan implements a sophisticated trading approach:
 ### Exit Conditions:
 - RSI divergence detection (price and RSI moving in opposite directions)
 - Price returning to support (for BUY positions) or resistance (for SELL positions) levels
+- Gemini AI recommendation based on market analysis
 - These exits are only triggered when the position is in profit
+
+## Gemini AI Integration
+
+The system now leverages Google's Gemini AI to enhance trade decisions:
+
+### Setup Verification:
+- Gemini analyzes all aspects of a potential trade before execution
+- Evaluates trend, entry patterns, and current market conditions
+- Provides a confidence score and detailed reasoning for approvals/rejections
+
+### Trade Monitoring:
+- Continually evaluates open positions for optimal exit points
+- Analyzes technical indicators, price action, and market structure
+- Provides exit recommendations with confidence scores
+
+### Configuration Options:
+- Enable/disable Gemini verification and monitoring independently
+- Set minimum confidence thresholds for trade approvals
+- Configure whether Gemini's opinion is advisory or mandatory
+
+### API Requirements:
+- Requires a Google Gemini API key (set via GEMINI_API_KEY environment variable)
+- Configurable API endpoint and parameters
+- Structured JSON responses for consistent decision-making
 
 ## Support and Resistance Detection
 
@@ -89,16 +119,24 @@ MT5_SETTINGS = {
     "password": "your_password",  # Your MT5 account password
     "server": "MetaQuotes-Demo",  # MT5 server name
 }
+`
+2. Set up your Gemini API key as an environment variable:
+```bash
+# Windows PowerShell
+$env:GEMINI_API_KEY = "your_gemini_api_key"
+
+# Linux/macOS
+export GEMINI_API_KEY="your_gemini_api_key"
 ```
 
-2. Create a `currency_pair_list.txt` file in the project root directory with the currency pairs you want to trade, one per line:
+3. Create a `currency_pair_list.txt` file in the project root directory with the currency pairs you want to trade, one per line:
 ```
 EURUSD
 GBPUSD
 USDJPY
 ```
 
-3. Adjust the trading settings in `mario_trader/config.py` if needed.
+4. Adjust the trading settings in `mario_trader/config.py` if needed.
 
 ## Usage
 
@@ -161,6 +199,7 @@ The SMA Crossover strategy with RSI confirmation works as follows:
 ### Exit Criteria:
 - RSI divergence detected while in profit
 - Price returning to support/resistance levels while in profit
+- Gemini AI exit recommendation with sufficient confidence
 
 ## License
 
